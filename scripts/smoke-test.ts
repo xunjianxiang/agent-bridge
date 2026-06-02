@@ -12,7 +12,7 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = "8787";
 const DEFAULT_REPORT_PATH = "reports/smoke-report.json";
 const DEFAULT_HTML_REPORT_PATH = "reports/smoke-report.html";
-const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_TIMEOUT_MS = 60000;
 
 export function providerIdsFrom(providers) {
   return providers.map((provider) => provider.id);
@@ -407,12 +407,12 @@ async function ensureServer(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
     stdio: ["ignore", "pipe", "pipe"]
   });
 
-  let stderr = "";
+  const output = { stderr: "" };
   child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
+    output.stderr += chunk.toString("utf8");
   });
 
-  await waitForHealth(baseUrl, child, stderr, timeoutMs);
+  await waitForHealth(baseUrl, child, output, timeoutMs);
 
   return {
     stop: async () => {
@@ -427,11 +427,11 @@ async function ensureServer(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
   };
 }
 
-async function waitForHealth(baseUrl, child, stderr, timeoutMs) {
+async function waitForHealth(baseUrl, child, output, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
-      throw new Error(`Server exited before health check passed. ${stderr}`.trim());
+      throw new Error(`Server exited before health check passed. ${output.stderr}`.trim());
     }
     if (await canReachHealth(baseUrl)) {
       return;

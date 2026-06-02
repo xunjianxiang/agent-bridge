@@ -14,6 +14,15 @@ type SmokeCase = {
 };
 
 describe("smoke provider selection", () => {
+  it("defaults to live agent checks unless HTTP-only mode is requested", () => {
+    expect(parseArgs([]).liveAgent).toBe(true);
+    expect(parseArgs(["--http-only"]).liveAgent).toBe(false);
+  });
+
+  it("uses a live-agent-friendly default timeout", () => {
+    expect(parseArgs([]).timeoutMs).toBe(60000);
+  });
+
   it("parses smoke timeout options for clearer failure boundaries", () => {
     const config = parseArgs(["--timeout-ms", "1500"]);
 

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ClaudeProvider } from "../src/providers/claude.provider.js";
 import { CodexProvider } from "../src/providers/codex.provider.js";
-import { GeminiProvider } from "../src/providers/gemini.provider.js";
+import {
+  GEMINI_CORE_CONFIG_FACTORY,
+  GeminiProvider,
+  type GeminiCoreConfigLike
+} from "../src/providers/gemini.provider.js";
 import type { ProcessRunnerService } from "../src/process/process-runner.service.js";
 
 type RunResult = { exitCode: number | null; stdout: string; stderr: string };
@@ -26,6 +30,17 @@ function recordingRunner(results: RunResult[]) {
     }
   } as unknown as ProcessRunnerService;
   return { processRunner, calls };
+}
+
+function geminiConfig(
+  initialize: () => Promise<void> = async () => undefined
+): GeminiCoreConfigLike {
+  return {
+    initialize,
+    getSessionId: () => "session_detect",
+    getModel: () => "gemini-test",
+    getGeminiClient: () => ({})
+  };
 }
 
 describe("provider detection", () => {
@@ -58,13 +73,11 @@ describe("provider detection", () => {
     expect(info.diagnostics).toContain("codex login status failed: not logged in");
   });
 
-  it("marks Gemini available only when CLI and local auth/session probe work", async () => {
-    const provider = new GeminiProvider(
-      runner([
-        { exitCode: 0, stdout: "0.44.0", stderr: "" },
-        { exitCode: 0, stdout: "Available sessions for this project (0)", stderr: "" }
-      ])
-    );
+  it("marks Gemini available when core initializes without invoking the CLI", async () => {
+    const processRunner = recordingRunner([]).processRunner;
+    const provider = new GeminiProvider(processRunner, {
+      [GEMINI_CORE_CONFIG_FACTORY]: () => geminiConfig()
+    });
 
     const info = await provider.detect();
 
@@ -72,20 +85,21 @@ describe("provider detection", () => {
     expect(info.authStatus).toBe("configured");
   });
 
-  it("allows Gemini CLI version detection enough time to exit cleanly", async () => {
-    const { processRunner, calls } = recordingRunner([
-      { exitCode: 0, stdout: "0.44.0", stderr: "" },
-      { exitCode: 0, stdout: "Available sessions for this project (0)", stderr: "" }
-    ]);
-    const provider = new GeminiProvider(processRunner);
-
-    await provider.detect();
-
-    expect(calls[0]).toMatchObject({
-      command: "gemini",
-      args: ["--version"],
-      timeoutMs: 10000
+  it("marks Gemini misconfigured when core initialization fails", async () => {
+    const { processRunner, calls } = recordingRunner([]);
+    const provider = new GeminiProvider(processRunner, {
+      [GEMINI_CORE_CONFIG_FACTORY]: () =>
+        geminiConfig(async () => {
+          throw new Error("auth missing");
+        })
     });
+
+    const info = await provider.detect();
+
+    expect(info.status).toBe("misconfigured");
+    expect(info.authStatus).toBe("missing");
+    expect(info.diagnostics).toContain("Gemini core initialization failed: auth missing");
+    expect(calls).toEqual([]);
   });
 
   it("marks Claude missing when the CLI is not installed even if the SDK is present", async () => {

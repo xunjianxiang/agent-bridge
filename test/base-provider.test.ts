@@ -84,6 +84,28 @@ class RecoveringProvider extends FakeProvider {
   }
 }
 
+class HangingAfterDoneProvider extends FakeProvider {
+  override async *stream(): AsyncIterable<StreamEvent> {
+    yield {
+      type: "message",
+      requestId: "inv_1",
+      role: "assistant",
+      delta: "pong",
+      timestamp: new Date().toISOString()
+    };
+    yield {
+      type: "done",
+      requestId: "inv_1",
+      timestamp: new Date().toISOString(),
+      response: {
+        requestId: "inv_1",
+        provider: "gemini"
+      }
+    };
+    await new Promise(() => undefined);
+  }
+}
+
 describe("BaseProvider", () => {
   it("returns assistant text as finalText when done response does not include it", async () => {
     const provider = new FakeProvider();
@@ -120,5 +142,21 @@ describe("BaseProvider", () => {
     const response = await provider.invoke("inv_1", request);
 
     expect(response.session).toBe("session_123");
+  });
+
+  it("returns as soon as a done event is received", async () => {
+    const provider = new HangingAfterDoneProvider();
+    const request: ProviderRequest = {
+      provider: "gemini",
+      input: "ping"
+    };
+
+    const response = await Promise.race([
+      provider.invoke("inv_1", request),
+      new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 50))
+    ]);
+
+    expect(response).not.toBe("timed-out");
+    expect(response).toMatchObject({ finalText: "pong" });
   });
 });

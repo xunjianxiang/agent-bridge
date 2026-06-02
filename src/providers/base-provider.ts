@@ -30,6 +30,7 @@ export abstract class BaseProvider implements AgentProvider {
       }
       if (event.type === "done") {
         response = event.response;
+        break;
       }
       if (event.type === "error") {
         lastError = event.error;

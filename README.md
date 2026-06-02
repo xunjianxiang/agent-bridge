@@ -154,11 +154,13 @@ Run smoke checks after building:
 
 ```bash
 npm run build
-npm run smoke -- --http-only --timeout-ms 10000
+npm run smoke
+# HTTP-only checks:
+npm run smoke -- -- --http-only
 ```
 
 ## Provider Status
 
 - Codex: implemented for invoke, stream, cancel, local image input, and native session resume.
-- Gemini: implemented through the Gemini CLI for string input, stream, cancel, and native session resume.
+- Gemini: implemented through `@google/gemini-cli-core` for string input, stream, cancel, and native session resume.
 - Claude: implemented through the Claude Agent SDK for string input, stream, cancel, and native session resume.

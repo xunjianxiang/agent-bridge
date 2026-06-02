@@ -60,7 +60,7 @@ export interface GeminiCoreSessionLike {
 
 export type GeminiCoreConfigFactory = (
   request: ProviderRequest,
-  requestId: string
+  rid: string
 ) => GeminiCoreConfigLike;
 export type GeminiCoreSessionFactory = (deps: {
   config: GeminiCoreConfigLike;
@@ -141,13 +141,13 @@ export class GeminiProvider extends BaseProvider {
   }
 
   async *stream(
-    requestId: string,
+    rid: string,
     request: ProviderRequest
   ): AsyncIterable<StreamEvent> {
     if (typeof request.input !== "string") {
       yield {
         type: "error",
-        requestId,
+        rid,
         timestamp: new Date().toISOString(),
         error: {
           code: "UNSUPPORTED_INPUT",
@@ -162,7 +162,7 @@ export class GeminiProvider extends BaseProvider {
     let session: GeminiCoreSessionLike | undefined;
 
     try {
-      const config = this.createConfig(request, requestId);
+      const config = this.createConfig(request, rid);
       await this.prepareAuth(config, request);
       await config.storage?.initialize?.();
       const resumed = request.session ? await this.loadSession(config, request.session) : null;
@@ -171,14 +171,14 @@ export class GeminiProvider extends BaseProvider {
 
       sessionId = request.session ?? config.getSessionId();
       session = this.createSession(config, sessionId);
-      this.sessions.set(requestId, session);
+      this.sessions.set(rid, session);
 
       for await (const event of session.sendStream({
         message: {
           content: [{ type: "text", text: request.input }]
         }
       })) {
-        const normalized = this.normalizeAgentEvent(requestId, event, sessionId);
+        const normalized = this.normalizeAgentEvent(rid, event, sessionId);
         if (event.type === "initialize") {
           sessionId = event.sessionId;
         }
@@ -189,7 +189,7 @@ export class GeminiProvider extends BaseProvider {
     } catch (error) {
       yield {
         type: "error",
-        requestId,
+        rid,
         timestamp: new Date().toISOString(),
         error: {
           code: "PROVIDER_ERROR",
@@ -198,24 +198,24 @@ export class GeminiProvider extends BaseProvider {
         }
       };
     } finally {
-      this.sessions.delete(requestId);
+      this.sessions.delete(rid);
     }
   }
 
-  override async cancel(requestId: string): Promise<void> {
-    const session = this.sessions.get(requestId);
+  override async cancel(rid: string): Promise<void> {
+    const session = this.sessions.get(rid);
     if (session) {
       await session.abort();
-      this.sessions.delete(requestId);
+      this.sessions.delete(rid);
     }
   }
 
   private createConfig(
     request: ProviderRequest,
-    requestId: string
+    rid: string
   ): GeminiCoreConfigLike {
     const factory = this.deps[GEMINI_CORE_CONFIG_FACTORY] ?? defaultConfigFactory;
-    return factory(request, requestId);
+    return factory(request, rid);
   }
 
   private createSession(
@@ -239,12 +239,12 @@ export class GeminiProvider extends BaseProvider {
     request: Partial<ProviderRequest>
   ): Promise<void> {
     const authType =
-      (request.nativeOptions?.geminiAuthType as AuthType | undefined) ??
+      (request.options?.geminiAuthType as AuthType | undefined) ??
       (process.env.AGENT_BRIDGE_GEMINI_AUTH_TYPE as AuthType | undefined) ??
       AuthType.LOGIN_WITH_GOOGLE;
-    const apiKey = request.nativeOptions?.geminiApiKey as string | undefined;
-    const baseUrl = request.nativeOptions?.geminiBaseUrl as string | undefined;
-    const customHeaders = request.nativeOptions?.geminiCustomHeaders as
+    const apiKey = request.options?.geminiApiKey as string | undefined;
+    const baseUrl = request.options?.geminiBaseUrl as string | undefined;
+    const customHeaders = request.options?.geminiCustomHeaders as
       | Record<string, string>
       | undefined;
 
@@ -306,7 +306,7 @@ export class GeminiProvider extends BaseProvider {
   }
 
   private normalizeAgentEvent(
-    requestId: string,
+    rid: string,
     event: AgentEvent,
     sessionId: string | undefined
   ): StreamEvent[] {
@@ -317,7 +317,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "message",
-            requestId,
+            rid,
             role: "system",
             content: `Gemini core session initialized${
               event.agentId ? ` with ${event.agentId}` : ""
@@ -330,7 +330,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "message",
-            requestId,
+            rid,
             role: "system",
             content: event.model
               ? `Gemini model set to ${event.model}.`
@@ -343,7 +343,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "message",
-            requestId,
+            rid,
             role: mapAgentRole(event.role),
             delta: contentText(event.content),
             timestamp,
@@ -354,7 +354,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "tool_call",
-            requestId,
+            rid,
             toolCallId: event.requestId,
             name: event.name,
             args: event.args,
@@ -367,7 +367,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "tool_call",
-            requestId,
+            rid,
             toolCallId: event.requestId,
             name: event.display?.name ?? "tool",
             status: "running",
@@ -379,7 +379,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "tool_result",
-            requestId,
+            rid,
             toolCallId: event.requestId,
             status: event.isError ? "error" : "success",
             output: event.data ?? contentText(event.content ?? []),
@@ -391,7 +391,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "stdout",
-            requestId,
+            rid,
             data: JSON.stringify(event),
             timestamp,
             raw: event
@@ -401,9 +401,9 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "done",
-            requestId,
+            rid,
             response: {
-              requestId,
+              rid,
               provider: this.id,
               session: sessionId,
               usage: event.data,
@@ -416,7 +416,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "error",
-            requestId,
+            rid,
             error: {
               code: event.status,
               message: event.message,
@@ -434,7 +434,7 @@ export class GeminiProvider extends BaseProvider {
         return [
           {
             type: "stdout",
-            requestId,
+            rid,
             data: JSON.stringify(event),
             timestamp,
             raw: event
@@ -446,7 +446,7 @@ export class GeminiProvider extends BaseProvider {
 
 function defaultConfigFactory(
   request: ProviderRequest,
-  requestId: string
+  rid: string
 ): GeminiCoreConfigLike {
   const cwd = request.cwd ?? process.cwd();
   const params: ConfigParameters = {
@@ -463,10 +463,10 @@ function defaultConfigFactory(
     skillsSupport: true,
     mcpEnabled: true,
     extensionsEnabled: true,
-    ...(request.nativeOptions?.geminiConfig as Partial<ConfigParameters> | undefined)
+    ...(request.options?.geminiConfig as Partial<ConfigParameters> | undefined)
   };
 
-  if (requestId === "detect") {
+  if (rid === "detect") {
     params.sessionId = `agent_bridge_detect_${createSessionId()}`;
     params.checkpointing = false;
     params.skillsSupport = false;

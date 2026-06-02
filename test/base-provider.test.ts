@@ -29,24 +29,24 @@ class FakeProvider extends BaseProvider {
   async *stream(): AsyncIterable<StreamEvent> {
     yield {
       type: "message",
-      requestId: "inv_1",
+      rid: "inv_1",
       role: "system",
       content: "initialized",
       timestamp: new Date().toISOString()
     };
     yield {
       type: "message",
-      requestId: "inv_1",
+      rid: "inv_1",
       role: "assistant",
       delta: "pong",
       timestamp: new Date().toISOString()
     };
     yield {
       type: "done",
-      requestId: "inv_1",
+      rid: "inv_1",
       timestamp: new Date().toISOString(),
       response: {
-        requestId: "inv_1",
+        rid: "inv_1",
         provider: "gemini"
       }
     };
@@ -57,7 +57,7 @@ class RecoveringProvider extends FakeProvider {
   override async *stream(): AsyncIterable<StreamEvent> {
     yield {
       type: "error",
-      requestId: "inv_1",
+      rid: "inv_1",
       timestamp: new Date().toISOString(),
       error: {
         code: "TRANSIENT",
@@ -67,17 +67,17 @@ class RecoveringProvider extends FakeProvider {
     };
     yield {
       type: "message",
-      requestId: "inv_1",
+      rid: "inv_1",
       role: "assistant",
       delta: "pong",
       timestamp: new Date().toISOString()
     };
     yield {
       type: "done",
-      requestId: "inv_1",
+      rid: "inv_1",
       timestamp: new Date().toISOString(),
       response: {
-        requestId: "inv_1",
+        rid: "inv_1",
         provider: "gemini"
       }
     };
@@ -88,17 +88,17 @@ class HangingAfterDoneProvider extends FakeProvider {
   override async *stream(): AsyncIterable<StreamEvent> {
     yield {
       type: "message",
-      requestId: "inv_1",
+      rid: "inv_1",
       role: "assistant",
       delta: "pong",
       timestamp: new Date().toISOString()
     };
     yield {
       type: "done",
-      requestId: "inv_1",
+      rid: "inv_1",
       timestamp: new Date().toISOString(),
       response: {
-        requestId: "inv_1",
+        rid: "inv_1",
         provider: "gemini"
       }
     };
@@ -107,7 +107,7 @@ class HangingAfterDoneProvider extends FakeProvider {
 }
 
 describe("BaseProvider", () => {
-  it("returns assistant text as finalText when done response does not include it", async () => {
+  it("returns assistant text as output when done response does not include it", async () => {
     const provider = new FakeProvider();
     const request: ProviderRequest = {
       provider: "gemini",
@@ -116,7 +116,7 @@ describe("BaseProvider", () => {
 
     const response = await provider.invoke("inv_1", request);
 
-    expect(response.finalText).toBe("pong");
+    expect(response.output).toBe("pong");
   });
 
   it("does not fail invoke when an error event is followed by done", async () => {
@@ -128,7 +128,7 @@ describe("BaseProvider", () => {
 
     const response = await provider.invoke("inv_1", request);
 
-    expect(response.finalText).toBe("pong");
+    expect(response.output).toBe("pong");
   });
 
   it("echoes the requested session when the provider response omits it", async () => {
@@ -157,6 +157,6 @@ describe("BaseProvider", () => {
     ]);
 
     expect(response).not.toBe("timed-out");
-    expect(response).toMatchObject({ finalText: "pong" });
+    expect(response).toMatchObject({ output: "pong" });
   });
 });

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // @ts-nocheck
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -13,31 +14,32 @@ const DEFAULT_PORT = "8787";
 const DEFAULT_REPORT_PATH = "reports/smoke-report.json";
 const DEFAULT_HTML_REPORT_PATH = "reports/smoke-report.html";
 const DEFAULT_TIMEOUT_MS = 60000;
+const DEFAULT_SMOKE_WORKSPACE = "smoke/workspace";
 
 export function providerIdsFrom(providers) {
   return providers.map((provider) => provider.id);
 }
 
-export function buildProviderTextRequest(provider, cwd) {
+export function buildProviderTextRequest(provider, project) {
   return {
     provider,
-    cwd,
+    project,
     input: "Reply with exactly: pong"
   };
 }
 
-export function buildProviderSessionMemorySeedRequest(provider, cwd, token) {
+export function buildProviderSessionMemorySeedRequest(provider, project, token) {
   return {
     provider,
-    cwd,
+    project,
     input: `Remember this exact token for the next turn: ${token}. Reply with exactly: stored`
   };
 }
 
-export function buildProviderSessionMemoryRecallRequest(provider, cwd, session) {
+export function buildProviderSessionMemoryRecallRequest(provider, project, session) {
   const request = {
     provider,
-    cwd,
+    project,
     input: "What exact token did I ask you to remember in the previous turn? Reply with only the token."
   };
   if (session) {
@@ -46,14 +48,14 @@ export function buildProviderSessionMemoryRecallRequest(provider, cwd, session) 
   return request;
 }
 
-export function buildCodexTextRequest(cwd) {
-  return buildProviderTextRequest("codex", cwd);
+export function buildCodexTextRequest(project) {
+  return buildProviderTextRequest("codex", project);
 }
 
-export function buildCodexFileReferenceRequest(cwd, filePath = "README.md") {
+export function buildCodexFileReferenceRequest(project, filePath = "README.md") {
   return {
     provider: "codex",
-    cwd,
+    project,
     input: `Read ${filePath} and summarize this project in one sentence.`
   };
 }
@@ -74,7 +76,7 @@ export function buildProviderSmokeSuites(providers, config) {
     const cases = [
       {
         name: "text invoke",
-        request: buildProviderTextRequest(providerId, config.cwd)
+        request: buildProviderTextRequest(providerId, config.project)
       },
       ...providerSpecificCases(providerId, config)
     ];
@@ -82,13 +84,13 @@ export function buildProviderSmokeSuites(providers, config) {
       const token = createSessionProbeToken(providerId);
       cases.push({
         name: "session memory seed",
-        request: buildProviderSessionMemorySeedRequest(providerId, config.cwd, token)
+        request: buildProviderSessionMemorySeedRequest(providerId, config.project, token)
       });
       cases.push({
         name: "session memory recall",
         nativeSessionFrom: "session memory seed",
         expectedFinalTextIncludes: token,
-        request: buildProviderSessionMemoryRecallRequest(providerId, config.cwd)
+        request: buildProviderSessionMemoryRecallRequest(providerId, config.project)
       });
     }
 
@@ -275,7 +277,7 @@ function providerSpecificCases(providerId, config) {
   const cases = [
     {
       name: "local file reference",
-      request: buildCodexFileReferenceRequest(config.cwd, config.file)
+      request: buildCodexFileReferenceRequest(config.project, config.file)
     }
   ];
 
@@ -292,7 +294,8 @@ function providerSpecificCases(providerId, config) {
 export function parseArgs(argv) {
   const config = {
     baseUrl: `http://${process.env.HOST ?? DEFAULT_HOST}:${process.env.PORT ?? DEFAULT_PORT}`,
-    cwd: process.cwd(),
+    workspace: normalizeWorkspace(process.env.WORKSPACE ?? DEFAULT_SMOKE_WORKSPACE),
+    project: basename(process.cwd()),
     file: "README.md",
     image: undefined,
     liveAgent: true,
@@ -310,8 +313,10 @@ export function parseArgs(argv) {
       config.liveAgent = false;
     } else if (arg === "--base-url") {
       config.baseUrl = requireValue(argv, ++i, "--base-url");
-    } else if (arg === "--cwd") {
-      config.cwd = requireValue(argv, ++i, "--cwd");
+    } else if (arg === "--workspace") {
+      config.workspace = normalizeWorkspace(requireValue(argv, ++i, "--workspace"));
+    } else if (arg === "--project") {
+      config.project = requireValue(argv, ++i, "--project");
     } else if (arg === "--file") {
       config.file = requireValue(argv, ++i, "--file");
     } else if (arg === "--image") {
@@ -347,7 +352,10 @@ function requireValue(argv, index, flag) {
 
 async function main() {
   const config = parseArgs(process.argv.slice(2));
-  const server = await ensureServer(config.baseUrl, config.timeoutMs);
+  if (config.liveAgent) {
+    await prepareSmokeProject(config);
+  }
+  const server = await ensureServer(config.baseUrl, config.timeoutMs, config);
   const startedAt = new Date().toISOString();
 
   try {
@@ -385,7 +393,7 @@ async function main() {
   }
 }
 
-async function ensureServer(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
+async function ensureServer(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS, config = parseArgs([])) {
   if (await canReachHealth(baseUrl)) {
     logInfo(`Using running server at ${baseUrl}`);
     return { stop: async () => {} };
@@ -399,11 +407,7 @@ async function ensureServer(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
   logInfo(`Starting built server at ${baseUrl}`);
   const url = new URL(baseUrl);
   const child = spawn(process.execPath, [entrypoint], {
-    env: {
-      ...process.env,
-      HOST: url.hostname,
-      PORT: url.port || DEFAULT_PORT
-    },
+    env: buildServerEnv(url, config),
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -425,6 +429,63 @@ async function ensureServer(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
       }
     }
   };
+}
+
+export function buildServerEnv(url, config) {
+  return {
+    ...process.env,
+    HOST: url.hostname,
+    PORT: url.port || DEFAULT_PORT,
+    WORKSPACE: config.workspace
+  };
+}
+
+export function resolveSmokeProjectCwd(config) {
+  const requestedProject = config.project?.trim() || ".";
+  if (isAbsolute(requestedProject)) {
+    throw new Error("project must be a relative path");
+  }
+  const projectsRoot = resolve(config.workspace, "projects");
+  const projectCwd = resolve(projectsRoot, requestedProject);
+  const relativePath = relative(projectsRoot, projectCwd);
+  if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new Error("project must stay inside WORKSPACE/projects");
+  }
+  return projectCwd;
+}
+
+export async function prepareSmokeProject(config) {
+  const projectCwd = resolveSmokeProjectCwd(config);
+  await mkdir(projectCwd, { recursive: true });
+
+  if (!config.file) {
+    return projectCwd;
+  }
+
+  const source = resolve(config.file);
+  if (!existsSync(source)) {
+    throw new Error(`Smoke file not found: ${source}`);
+  }
+
+  const target = resolve(projectCwd, config.file);
+  await mkdir(dirname(target), { recursive: true });
+  await copyFile(source, target);
+  logInfo(`Prepared smoke project at ${projectCwd}`);
+  return projectCwd;
+}
+
+function normalizeWorkspace(workspace) {
+  return resolve(expandHome(workspace));
+}
+
+function expandHome(path) {
+  if (path === "~") {
+    return homedir();
+  }
+  if (path.startsWith("~/") || path.startsWith("~\\")) {
+    return resolve(homedir(), path.slice(2));
+  }
+  return path;
 }
 
 async function waitForHealth(baseUrl, child, output, timeoutMs) {
@@ -574,14 +635,14 @@ function validateCaseResponse(testCase, response) {
     return undefined;
   }
 
-  const finalText = response?.finalText ?? "";
-  if (!finalText.includes(testCase.expectedFinalTextIncludes)) {
-    throw new Error(`Expected response finalText to include ${testCase.expectedFinalTextIncludes}`);
+  const output = response?.output ?? "";
+  if (!output.includes(testCase.expectedFinalTextIncludes)) {
+    throw new Error(`Expected response output to include ${testCase.expectedFinalTextIncludes}`);
   }
 
   return {
     expectedFinalTextIncludes: testCase.expectedFinalTextIncludes,
-    actualFinalText: finalText
+    actualOutput: output
   };
 }
 
@@ -595,7 +656,7 @@ async function postInvoke(baseUrl, body, label, timeoutMs = DEFAULT_TIMEOUT_MS) 
   if (!response.ok) {
     throw new Error(`${label} failed with ${response.status}: ${JSON.stringify(payload)}`);
   }
-  if (!payload?.requestId || payload.provider !== body.provider) {
+  if (!payload?.rid || payload.provider !== body.provider) {
     throw new Error(`${label} returned an invalid response: ${JSON.stringify(payload)}`);
   }
   return payload;

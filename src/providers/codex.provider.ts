@@ -101,11 +101,11 @@ export class CodexProvider extends BaseProvider {
   }
 
   async *stream(
-    requestId: string,
+    rid: string,
     request: ProviderRequest
   ): AsyncIterable<StreamEvent> {
     const abortController = new AbortController();
-    this.abortControllers.set(requestId, abortController);
+    this.abortControllers.set(rid, abortController);
 
     if (request.signal) {
       request.signal.addEventListener("abort", () => abortController.abort(), {
@@ -115,15 +115,15 @@ export class CodexProvider extends BaseProvider {
 
     try {
       const codex = this.codexFactory({
-        ...(request.nativeOptions?.codexOptions as Record<string, unknown> | undefined)
+        ...(request.options?.codexOptions as Record<string, unknown> | undefined)
       });
       const thread = this.createThread(codex, request);
       const streamed = await thread.runStreamed(toCodexInput(request.input), {
         signal: abortController.signal,
-        ...(request.nativeOptions?.turnOptions as Record<string, unknown> | undefined)
+        ...(request.options?.turnOptions as Record<string, unknown> | undefined)
       });
       const normalizeCodexEvent = createCodexEventNormalizer(
-        requestId,
+        rid,
         request.session
       );
 
@@ -135,7 +135,7 @@ export class CodexProvider extends BaseProvider {
     } catch (error) {
       yield {
         type: "error",
-        requestId,
+        rid,
         timestamp: new Date().toISOString(),
         error: {
           code: abortController.signal.aborted ? "PROVIDER_CANCELLED" : "PROVIDER_ERROR",
@@ -144,20 +144,20 @@ export class CodexProvider extends BaseProvider {
         }
       };
     } finally {
-      this.abortControllers.delete(requestId);
+      this.abortControllers.delete(rid);
     }
   }
 
-  override async cancel(requestId: string): Promise<void> {
-    this.abortControllers.get(requestId)?.abort();
-    this.abortControllers.delete(requestId);
+  override async cancel(rid: string): Promise<void> {
+    this.abortControllers.get(rid)?.abort();
+    this.abortControllers.delete(rid);
   }
 
   private createThread(codex: CodexClientLike, request: ProviderRequest): CodexThreadLike {
     const threadOptions: ThreadOptions = {
       workingDirectory: request.cwd,
       model: request.model,
-      ...(request.nativeOptions?.threadOptions as Record<string, unknown> | undefined)
+      ...(request.options?.threadOptions as Record<string, unknown> | undefined)
     };
 
     if (request.session) {

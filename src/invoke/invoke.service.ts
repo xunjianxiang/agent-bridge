@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
 import type { BridgeError, ProviderId, ProviderRequest, ProviderResponse } from "../core/types.js";
 import { providerRequestSchema } from "../core/request.schema.js";
+import { createRid } from "../core/rid.js";
+import { resolveProjectCwd } from "../core/workspace.js";
 import { ProviderRegistry } from "../providers/provider.registry.js";
 import { InvocationRegistryService } from "./invocation-registry.service.js";
 
@@ -20,21 +21,18 @@ export class InvokeService {
       throw new BadRequestException(parsed.error.flatten());
     }
 
-    const requestId = `inv_${randomUUID()}`;
+    const rid = createRid();
     const provider = this.providers.get(parsed.data.provider);
-    const handle = this.invocations.create(requestId, provider.id, () =>
-      provider.cancel(requestId)
+    const handle = this.invocations.create(rid, provider.id, () =>
+      provider.cancel(rid)
     );
 
-    const request: ProviderRequest = {
-      ...parsed.data,
-      signal: handle.abortController.signal
-    };
+    const request = toProviderRequest(parsed.data, handle.abortController.signal);
 
     try {
-      return await provider.invoke(requestId, request);
+      return await provider.invoke(rid, request);
     } finally {
-      this.invocations.delete(requestId);
+      this.invocations.delete(rid);
     }
   }
 
@@ -44,26 +42,23 @@ export class InvokeService {
       throw new BadRequestException(parsed.error.flatten());
     }
 
-    const requestId = `inv_${randomUUID()}`;
+    const rid = createRid();
     const provider = this.providers.get(parsed.data.provider);
-    const handle = this.invocations.create(requestId, provider.id, () =>
-      provider.cancel(requestId)
+    const handle = this.invocations.create(rid, provider.id, () =>
+      provider.cancel(rid)
     );
-    const request: ProviderRequest = {
-      ...parsed.data,
-      signal: handle.abortController.signal
-    };
+    const request = toProviderRequest(parsed.data, handle.abortController.signal);
     const run: InvokeRun = {
-      requestId,
+      rid,
       provider: provider.id,
       status: "running"
     };
-    this.runs.set(requestId, run);
+    this.runs.set(rid, run);
 
     void provider
-      .invoke(requestId, request)
+      .invoke(rid, request)
       .then((response) => {
-        const current = this.runs.get(requestId);
+        const current = this.runs.get(rid);
         if (!current || current.status === "cancelled") {
           return;
         }
@@ -71,7 +66,7 @@ export class InvokeService {
         current.response = response;
       })
       .catch((error) => {
-        const current = this.runs.get(requestId);
+        const current = this.runs.get(rid);
         if (!current || current.status === "cancelled") {
           return;
         }
@@ -79,34 +74,34 @@ export class InvokeService {
         current.error = toBridgeError(error, provider.id);
       })
       .finally(() => {
-        this.invocations.delete(requestId);
+        this.invocations.delete(rid);
       });
 
     return snapshot(run);
   }
 
-  async getRun(requestId: string): Promise<InvokeRunSnapshot> {
-    const run = this.runs.get(requestId);
+  async getRun(rid: string): Promise<InvokeRunSnapshot> {
+    const run = this.runs.get(rid);
     if (!run) {
-      throw new BadRequestException(`Run not found: ${requestId}`);
+      throw new BadRequestException(`Run not found: ${rid}`);
     }
     return snapshot(run);
   }
 
-  async cancel(requestId: string): Promise<{ requestId: string; cancelled: true }> {
-    const run = this.runs.get(requestId);
+  async cancel(rid: string): Promise<{ rid: string; cancelled: true }> {
+    const run = this.runs.get(rid);
     if (run && run.status === "running") {
       run.status = "cancelled";
     }
-    await this.invocations.cancel(requestId);
-    return { requestId, cancelled: true };
+    await this.invocations.cancel(rid);
+    return { rid, cancelled: true };
   }
 }
 
 export type InvokeRunStatus = "running" | "completed" | "failed" | "cancelled";
 
 interface InvokeRun {
-  requestId: string;
+  rid: string;
   provider: ProviderId;
   status: InvokeRunStatus;
   response?: ProviderResponse;
@@ -114,7 +109,7 @@ interface InvokeRun {
 }
 
 export interface InvokeRunSnapshot {
-  requestId: string;
+  rid: string;
   provider: ProviderId;
   status: InvokeRunStatus;
   response?: ProviderResponse;
@@ -123,7 +118,7 @@ export interface InvokeRunSnapshot {
 
 function snapshot(run: InvokeRun): InvokeRunSnapshot {
   return {
-    requestId: run.requestId,
+    rid: run.rid,
     provider: run.provider,
     status: run.status,
     response: run.response,
@@ -137,4 +132,20 @@ function toBridgeError(error: unknown, provider: ProviderId): BridgeError {
     message: error instanceof Error ? error.message : String(error),
     provider
   };
+}
+
+function toProviderRequest(
+  parsed: ReturnType<typeof providerRequestSchema.parse>,
+  signal: AbortSignal
+): ProviderRequest {
+  const { project, ...request } = parsed;
+  try {
+    return {
+      ...request,
+      cwd: resolveProjectCwd(project),
+      signal
+    };
+  } catch (error) {
+    throw new BadRequestException(error instanceof Error ? error.message : String(error));
+  }
 }

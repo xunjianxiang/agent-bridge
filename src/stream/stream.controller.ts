@@ -1,8 +1,9 @@
 import { BadRequestException, Body, Controller, Post, Res } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
-import { randomUUID } from "node:crypto";
 import { providerRequestSchema } from "../core/request.schema.js";
+import { createRid } from "../core/rid.js";
 import type { ProviderRequest, StreamEvent } from "../core/types.js";
+import { resolveProjectCwd } from "../core/workspace.js";
 import { InvocationRegistryService } from "../invoke/invocation-registry.service.js";
 import { ProviderRegistry } from "../providers/provider.registry.js";
 import { formatSseEvent } from "./sse.js";
@@ -24,15 +25,15 @@ export class StreamController {
       throw new BadRequestException(parsed.error.flatten());
     }
 
-    const requestId = `inv_${randomUUID()}`;
+    const rid = createRid();
     const provider = this.providers.get(parsed.data.provider);
-    const handle = this.invocations.create(requestId, provider.id, () =>
-      provider.cancel(requestId)
+    const handle = this.invocations.create(rid, provider.id, () =>
+      provider.cancel(rid)
     );
-    const request: ProviderRequest = {
-      ...parsed.data,
-      signal: handle.abortController.signal
-    };
+    const request: ProviderRequest = toProviderRequest(
+      parsed.data,
+      handle.abortController.signal
+    );
 
     let completed = false;
 
@@ -45,7 +46,7 @@ export class StreamController {
 
     const onClose = (): void => {
       if (!completed) {
-        void this.invocations.cancel(requestId);
+        void this.invocations.cancel(rid);
       }
     };
     reply.raw.on("close", onClose);
@@ -53,17 +54,17 @@ export class StreamController {
     try {
       this.write(reply, {
         type: "started",
-        requestId,
+        rid,
         provider: provider.id,
         timestamp: new Date().toISOString()
       });
-      for await (const event of provider.stream(requestId, request)) {
+      for await (const event of provider.stream(rid, request)) {
         this.write(reply, event);
       }
     } catch (error) {
       this.write(reply, {
         type: "error",
-        requestId,
+        rid,
         timestamp: new Date().toISOString(),
         error: {
           code: "STREAM_FAILED",
@@ -74,12 +75,28 @@ export class StreamController {
     } finally {
       completed = true;
       reply.raw.off("close", onClose);
-      this.invocations.delete(requestId);
+      this.invocations.delete(rid);
       reply.raw.end();
     }
   }
 
   private write(reply: FastifyReply, event: StreamEvent): void {
     reply.raw.write(formatSseEvent(event));
+  }
+}
+
+function toProviderRequest(
+  parsed: ReturnType<typeof providerRequestSchema.parse>,
+  signal: AbortSignal
+): ProviderRequest {
+  const { project, ...request } = parsed;
+  try {
+    return {
+      ...request,
+      cwd: resolveProjectCwd(project),
+      signal
+    };
+  } catch (error) {
+    throw new BadRequestException(error instanceof Error ? error.message : String(error));
   }
 }

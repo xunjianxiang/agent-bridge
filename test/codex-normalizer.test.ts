@@ -18,7 +18,7 @@ describe("normalizeCodexEvent", () => {
     expect(events).toMatchObject([
       {
         type: "message",
-        requestId: "inv_1",
+        rid: "inv_1",
         role: "assistant",
         content: "hello"
       }
@@ -42,7 +42,7 @@ describe("normalizeCodexEvent", () => {
     expect(events).toMatchObject([
       {
         type: "tool_result",
-        requestId: "inv_1",
+        rid: "inv_1",
         toolCallId: "tool_1",
         status: "success"
       }
@@ -63,9 +63,9 @@ describe("normalizeCodexEvent", () => {
     expect(events).toMatchObject([
       {
         type: "done",
-        requestId: "inv_1",
+        rid: "inv_1",
         response: {
-          requestId: "inv_1",
+          rid: "inv_1",
           provider: "codex"
         }
       }

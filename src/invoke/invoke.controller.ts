@@ -16,18 +16,18 @@ export class InvokeController {
     return this.invokeService.start(body);
   }
 
-  @Get("invoke/:requestId")
-  async getRun(@Param("requestId") requestId: string): Promise<InvokeRunSnapshot> {
-    return await this.invokeService.getRun(requestId);
+  @Get("invoke/:rid")
+  async getRun(@Param("rid") rid: string): Promise<InvokeRunSnapshot> {
+    return await this.invokeService.getRun(rid);
   }
 
   @Post("cancel")
   async cancel(
-    @Body() body: { requestId?: string }
-  ): Promise<{ requestId: string; cancelled: true }> {
-    if (!body.requestId) {
-      throw new BadRequestException("requestId is required");
+    @Body() body: { rid?: string }
+  ): Promise<{ rid: string; cancelled: true }> {
+    if (!body.rid) {
+      throw new BadRequestException("rid is required");
     }
-    return await this.invokeService.cancel(body.requestId);
+    return await this.invokeService.cancel(body.rid);
   }
 }

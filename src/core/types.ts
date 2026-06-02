@@ -50,20 +50,20 @@ export interface ProviderRequest {
     | Array<
         | { type: "text"; text: string }
         | { type: "local_image"; path: string }
-      >;
+  >;
   cwd?: string;
   model?: string;
   session?: string;
-  nativeOptions?: Record<string, unknown>;
+  options?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   signal?: AbortSignal;
 }
 
 export interface ProviderResponse {
-  requestId: string;
+  rid: string;
   provider: ProviderId;
   session?: string;
-  finalText?: string;
+  output?: string;
   usage?: Record<string, unknown>;
   raw?: unknown;
 }
@@ -71,27 +71,27 @@ export interface ProviderResponse {
 export type StreamEvent =
   | {
       type: "started";
-      requestId: string;
+      rid: string;
       provider: ProviderId;
       timestamp: string;
     }
   | {
       type: "stdout";
-      requestId: string;
+      rid: string;
       data: string;
       timestamp: string;
       raw?: unknown;
     }
   | {
       type: "stderr";
-      requestId: string;
+      rid: string;
       data: string;
       timestamp: string;
       raw?: unknown;
     }
   | {
       type: "message";
-      requestId: string;
+      rid: string;
       role: "assistant" | "user" | "system";
       delta?: string;
       content?: string;
@@ -101,7 +101,7 @@ export type StreamEvent =
   | ToolCallEvent
   | {
       type: "tool_result";
-      requestId: string;
+      rid: string;
       toolCallId: string;
       status: "success" | "error" | "cancelled";
       output?: unknown;
@@ -111,13 +111,13 @@ export type StreamEvent =
     }
   | {
       type: "done";
-      requestId: string;
+      rid: string;
       response: ProviderResponse;
       timestamp: string;
     }
   | {
       type: "error";
-      requestId: string;
+      rid: string;
       error: BridgeError;
       raw?: unknown;
       timestamp: string;
@@ -125,7 +125,7 @@ export type StreamEvent =
 
 export interface ToolCallEvent {
   type: "tool_call";
-  requestId: string;
+  rid: string;
   toolCallId: string;
   name: string;
   args?: Record<string, unknown>;
@@ -138,7 +138,7 @@ export interface AgentProvider {
   readonly id: ProviderId;
   capabilities(): ProviderCapabilities;
   detect(): Promise<ProviderInfo>;
-  invoke(requestId: string, request: ProviderRequest): Promise<ProviderResponse>;
-  stream(requestId: string, request: ProviderRequest): AsyncIterable<StreamEvent>;
-  cancel(requestId: string): Promise<void>;
+  invoke(rid: string, request: ProviderRequest): Promise<ProviderResponse>;
+  stream(rid: string, request: ProviderRequest): AsyncIterable<StreamEvent>;
+  cancel(rid: string): Promise<void>;
 }

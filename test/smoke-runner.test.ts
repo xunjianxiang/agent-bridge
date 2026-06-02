@@ -1,10 +1,13 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { basename, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildServerEnv,
   buildProviderSmokeSuites,
   parseArgs,
   providerSkipReason,
+  resolveSmokeProjectCwd,
   smokeProviderSuites
 } from "../scripts/smoke-test.js";
 
@@ -23,6 +26,45 @@ describe("smoke provider selection", () => {
     expect(parseArgs([]).timeoutMs).toBe(60000);
   });
 
+  it("defaults live smoke to a seeded project inside the smoke workspace", () => {
+    const config = parseArgs([]);
+
+    expect(config.workspace).toBe(resolve("smoke/workspace"));
+    expect(config.project).toBe(basename(process.cwd()));
+    expect(resolveSmokeProjectCwd(config)).toBe(
+      resolve("smoke/workspace", "projects", basename(process.cwd()))
+    );
+  });
+
+  it("passes the smoke workspace to a server started by the runner", () => {
+    const env = buildServerEnv(new URL("http://127.0.0.1:9876"), {
+      ...parseArgs([]),
+      workspace: resolve("tmp/smoke-workspace")
+    });
+
+    expect(env).toMatchObject({
+      HOST: "127.0.0.1",
+      PORT: "9876",
+      WORKSPACE: resolve("tmp/smoke-workspace")
+    });
+  });
+
+  it("parses explicit smoke workspace and project options", () => {
+    const config = parseArgs(["--workspace", "C:\\agent-work", "--project", "demo"]);
+
+    expect(config.workspace).toBe("C:\\agent-work");
+    expect(config.project).toBe("demo");
+  });
+
+  it("rejects smoke projects outside the workspace projects directory", () => {
+    expect(() =>
+      resolveSmokeProjectCwd({
+        ...parseArgs([]),
+        project: "../outside"
+      })
+    ).toThrow("project must stay inside WORKSPACE/projects");
+  });
+
   it("parses smoke timeout options for clearer failure boundaries", () => {
     const config = parseArgs(["--timeout-ms", "1500"]);
 
@@ -32,7 +74,7 @@ describe("smoke provider selection", () => {
   it("keeps provider auth status in each suite", () => {
     const suites = buildProviderSmokeSuites(
       [{ id: "codex", status: "misconfigured", authStatus: "missing", nativeSession: true }],
-      { cwd: "C:\\repo", file: "README.md" }
+      { project: "agent-bridge", file: "README.md" }
     );
 
     expect(suites[0]).toMatchObject({
@@ -49,7 +91,7 @@ describe("smoke provider selection", () => {
         { id: "codex", status: "available", authStatus: "configured", nativeSession: true },
         { id: "plain", status: "available", authStatus: "configured", nativeSession: false }
       ],
-      { cwd: "C:\\repo", file: "README.md" }
+      { project: "agent-bridge", file: "README.md" }
     );
 
     expect(suites[0]?.cases.map((testCase: SmokeCase) => testCase.name)).toEqual([
@@ -109,10 +151,10 @@ describe("smoke provider selection", () => {
       response.setHeader("Content-Type", "application/json");
       response.end(
         JSON.stringify({
-          requestId: `req_${requests.length}`,
+          rid: `req_${requests.length}`,
           provider: payload.provider,
           session: payload.session ?? "session_1",
-          finalText: payload.session ? "token_alpha" : "stored"
+          output: payload.session ? "token_alpha" : "stored"
         })
       );
     });
@@ -174,10 +216,10 @@ describe("smoke provider selection", () => {
       response.setHeader("Content-Type", "application/json");
       response.end(
         JSON.stringify({
-          requestId: "req",
+          rid: "req",
           provider: payload.provider,
           session: payload.session ?? "session_1",
-          finalText: "I do not know"
+          output: "I do not know"
         })
       );
     });
@@ -214,7 +256,7 @@ describe("smoke provider selection", () => {
         caseName: "session memory recall",
         status: "failed",
         error: {
-          message: "Expected response finalText to include token_alpha"
+          message: "Expected response output to include token_alpha"
         }
       });
     } finally {

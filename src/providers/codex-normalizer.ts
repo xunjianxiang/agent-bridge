@@ -2,7 +2,7 @@ import type { ThreadEvent, ThreadItem, Usage } from "@openai/codex-sdk";
 import type { StreamEvent } from "../core/types.js";
 
 export function createCodexEventNormalizer(
-  requestId: string,
+  rid: string,
   initialSession?: string
 ): (event: ThreadEvent) => StreamEvent[] {
   let session = initialSession;
@@ -12,7 +12,7 @@ export function createCodexEventNormalizer(
       session = event.thread_id;
     }
 
-    return normalizeCodexEvent(requestId, event).map((streamEvent) => {
+    return normalizeCodexEvent(rid, event).map((streamEvent) => {
       if (streamEvent.type !== "done") {
         return streamEvent;
       }
@@ -29,7 +29,7 @@ export function createCodexEventNormalizer(
 }
 
 export function normalizeCodexEvent(
-  requestId: string,
+  rid: string,
   event: ThreadEvent
 ): StreamEvent[] {
   const timestamp = new Date().toISOString();
@@ -39,7 +39,7 @@ export function normalizeCodexEvent(
       return [
         {
           type: "message",
-          requestId,
+          rid,
           role: "system",
           content: `Codex thread started: ${event.thread_id}`,
           timestamp,
@@ -50,9 +50,9 @@ export function normalizeCodexEvent(
       return [
         {
           type: "done",
-          requestId,
+          rid,
           response: {
-            requestId,
+            rid,
             provider: "codex",
             usage: codexUsageToRecord(event.usage),
             raw: event
@@ -64,7 +64,7 @@ export function normalizeCodexEvent(
       return [
         {
           type: "error",
-          requestId,
+          rid,
           error: {
             code: "PROVIDER_TURN_FAILED",
             message: event.error.message,
@@ -78,7 +78,7 @@ export function normalizeCodexEvent(
       return [
         {
           type: "error",
-          requestId,
+          rid,
           error: {
             code: "PROVIDER_ERROR",
             message: event.message,
@@ -91,14 +91,14 @@ export function normalizeCodexEvent(
     case "item.started":
     case "item.updated":
     case "item.completed":
-      return normalizeCodexItem(requestId, event.item, event.type, timestamp, event);
+      return normalizeCodexItem(rid, event.item, event.type, timestamp, event);
     case "turn.started":
       return [];
   }
 }
 
 function normalizeCodexItem(
-  requestId: string,
+  rid: string,
   item: ThreadItem,
   phase: "item.started" | "item.updated" | "item.completed",
   timestamp: string,
@@ -109,7 +109,7 @@ function normalizeCodexItem(
       return [
         {
           type: "message",
-          requestId,
+          rid,
           role: "assistant",
           content: item.text,
           timestamp,
@@ -120,7 +120,7 @@ function normalizeCodexItem(
       return [
         {
           type: "message",
-          requestId,
+          rid,
           role: "system",
           content: item.text,
           timestamp,
@@ -128,14 +128,14 @@ function normalizeCodexItem(
         }
       ];
     case "command_execution":
-      return normalizeCommandExecution(requestId, item, phase, timestamp, raw);
+      return normalizeCommandExecution(rid, item, phase, timestamp, raw);
     case "mcp_tool_call":
-      return normalizeMcpToolCall(requestId, item, phase, timestamp, raw);
+      return normalizeMcpToolCall(rid, item, phase, timestamp, raw);
     case "error":
       return [
         {
           type: "error",
-          requestId,
+          rid,
           error: {
             code: "PROVIDER_ITEM_ERROR",
             message: item.message,
@@ -151,7 +151,7 @@ function normalizeCodexItem(
       return [
         {
           type: "tool_call",
-          requestId,
+          rid,
           toolCallId: item.id,
           name: item.type,
           status: mapCodexPhase(phase),
@@ -163,7 +163,7 @@ function normalizeCodexItem(
 }
 
 function normalizeCommandExecution(
-  requestId: string,
+  rid: string,
   item: Extract<ThreadItem, { type: "command_execution" }>,
   phase: "item.started" | "item.updated" | "item.completed",
   timestamp: string,
@@ -172,7 +172,7 @@ function normalizeCommandExecution(
   const events: StreamEvent[] = [
     {
       type: "tool_call",
-      requestId,
+      rid,
       toolCallId: item.id,
       name: "command_execution",
       args: { command: item.command },
@@ -185,7 +185,7 @@ function normalizeCommandExecution(
   if (item.aggregated_output) {
     events.push({
       type: "stdout",
-      requestId,
+      rid,
       data: item.aggregated_output,
       timestamp,
       raw
@@ -195,7 +195,7 @@ function normalizeCommandExecution(
   if (phase === "item.completed") {
     events.push({
       type: "tool_result",
-      requestId,
+      rid,
       toolCallId: item.id,
       status: item.status === "failed" ? "error" : "success",
       output: {
@@ -211,7 +211,7 @@ function normalizeCommandExecution(
 }
 
 function normalizeMcpToolCall(
-  requestId: string,
+  rid: string,
   item: Extract<ThreadItem, { type: "mcp_tool_call" }>,
   phase: "item.started" | "item.updated" | "item.completed",
   timestamp: string,
@@ -221,7 +221,7 @@ function normalizeMcpToolCall(
     return [
       {
         type: "tool_result",
-        requestId,
+        rid,
         toolCallId: item.id,
         status: item.status === "failed" ? "error" : "success",
         output: item.result,
@@ -241,7 +241,7 @@ function normalizeMcpToolCall(
   return [
     {
       type: "tool_call",
-      requestId,
+      rid,
       toolCallId: item.id,
       name: `${item.server}.${item.tool}`,
       args: item.arguments as Record<string, unknown>,

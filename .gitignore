@@ -6,4 +6,5 @@ dist
 .research
 coverage
 reports
+smoke/workspace
 *.log

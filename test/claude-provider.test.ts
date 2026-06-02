@@ -82,10 +82,10 @@ describe("ClaudeProvider", () => {
       })
     });
     expect(response).toMatchObject({
-      requestId: "inv_1",
+      rid: "inv_1",
       provider: "claude",
       session: "session_new",
-      finalText: "pong"
+      output: "pong"
     });
   });
 

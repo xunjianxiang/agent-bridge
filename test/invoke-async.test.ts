@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { resolve } from "node:path";
 import { InvokeService } from "../src/invoke/invoke.service.js";
 import { InvocationRegistryService } from "../src/invoke/invocation-registry.service.js";
 import type {
@@ -13,6 +14,7 @@ import type {
 class SlowProvider implements AgentProvider {
   readonly id = "codex" as const;
   cancelled = false;
+  lastRequest?: ProviderRequest;
 
   capabilities(): ProviderCapabilities {
     return {
@@ -36,14 +38,15 @@ class SlowProvider implements AgentProvider {
     };
   }
 
-  async invoke(_requestId: string, request: ProviderRequest): Promise<ProviderResponse> {
+  async invoke(_rid: string, request: ProviderRequest): Promise<ProviderResponse> {
+    this.lastRequest = request;
     await new Promise<void>((resolve, reject) => {
       request.signal?.addEventListener("abort", () => reject(new Error("cancelled")), {
         once: true
       });
       setTimeout(resolve, 1000);
     });
-    return { requestId: _requestId, provider: this.id, finalText: "done" };
+    return { rid: _rid, provider: this.id, output: "done" };
   }
 
   async *stream(): AsyncIterable<StreamEvent> {
@@ -56,6 +59,16 @@ class SlowProvider implements AgentProvider {
 }
 
 describe("InvokeService async runs", () => {
+  const originalWorkspace = process.env.WORKSPACE;
+
+  afterEach(() => {
+    if (originalWorkspace === undefined) {
+      delete process.env.WORKSPACE;
+    } else {
+      process.env.WORKSPACE = originalWorkspace;
+    }
+  });
+
   it("returns a request id immediately so callers can cancel the active run", async () => {
     const provider = new SlowProvider();
     const service = new InvokeService(
@@ -69,10 +82,28 @@ describe("InvokeService async runs", () => {
     });
 
     expect(run.status).toBe("running");
-    await service.cancel(run.requestId);
-    const status = await service.getRun(run.requestId);
+    await service.cancel(run.rid);
+    const status = await service.getRun(run.rid);
 
     expect(provider.cancelled).toBe(true);
     expect(status.status).toBe("cancelled");
+  });
+
+  it("resolves the public project field into an internal provider cwd", async () => {
+    process.env.WORKSPACE = resolve("C:\\repo");
+    const provider = new SlowProvider();
+    const service = new InvokeService(
+      { get: () => provider } as never,
+      new InvocationRegistryService()
+    );
+
+    const run = service.start({
+      provider: "codex",
+      project: "packages/api",
+      input: "keep running"
+    });
+
+    expect(provider.lastRequest?.cwd).toBe(resolve("C:\\repo", "projects", "packages/api"));
+    await service.cancel(run.rid);
   });
 });

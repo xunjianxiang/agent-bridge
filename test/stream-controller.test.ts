@@ -7,11 +7,11 @@ describe("StreamController", () => {
     const writes: string[] = [];
     const provider = {
       id: "codex",
-      async *stream(requestId: string): AsyncIterable<StreamEvent> {
+      async *stream(rid: string): AsyncIterable<StreamEvent> {
         yield {
           type: "done",
-          requestId,
-          response: { requestId, provider: "codex" },
+          rid,
+          response: { rid, provider: "codex" },
           timestamp: "2026-06-02T00:00:00.000Z"
         };
       },
@@ -20,8 +20,8 @@ describe("StreamController", () => {
     const controller = new StreamController(
       { get: () => provider } as never,
       {
-        create: (requestId: string) => ({
-          requestId,
+        create: (rid: string) => ({
+          rid,
           provider: "codex",
           abortController: new AbortController()
         }),

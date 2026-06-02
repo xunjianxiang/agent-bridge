@@ -17,16 +17,16 @@ export abstract class BaseProvider implements AgentProvider {
   abstract detect(): Promise<ProviderInfo>;
 
   async invoke(
-    requestId: string,
+    rid: string,
     request: ProviderRequest
   ): Promise<ProviderResponse> {
-    let finalText = "";
+    let output = "";
     let response: ProviderResponse | undefined;
     let lastError: BridgeError | undefined;
 
-    for await (const event of this.stream(requestId, request)) {
+    for await (const event of this.stream(rid, request)) {
       if (event.type === "message" && event.role === "assistant") {
-        finalText += event.delta ?? event.content ?? "";
+        output += event.delta ?? event.content ?? "";
       }
       if (event.type === "done") {
         response = event.response;
@@ -46,23 +46,23 @@ export abstract class BaseProvider implements AgentProvider {
         ? {
             ...response,
             session: response.session ?? request.session,
-            finalText: response.finalText ?? finalText
+            output: response.output ?? output
           }
         : {
-        requestId,
+        rid,
         provider: this.id,
         session: request.session,
-        finalText
+        output
       }
     );
   }
 
   abstract stream(
-    requestId: string,
+    rid: string,
     request: ProviderRequest
   ): AsyncIterable<StreamEvent>;
 
-  async cancel(_requestId: string): Promise<void> {
+  async cancel(_rid: string): Promise<void> {
     return;
   }
 

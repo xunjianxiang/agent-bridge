@@ -75,7 +75,7 @@ describe("GeminiProvider core adapter", () => {
     });
 
     expect(response.session).toBe("session_new");
-    expect(response.finalText).toBe("pong");
+    expect(response.output).toBe("pong");
   });
 
   it("loads native session history before creating a resumed Gemini core session", async () => {

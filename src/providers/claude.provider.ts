@@ -88,13 +88,13 @@ export class ClaudeProvider extends BaseProvider {
   }
 
   async *stream(
-    requestId: string,
+    rid: string,
     request: ProviderRequest
   ): AsyncIterable<StreamEvent> {
     if (typeof request.input !== "string") {
       yield {
         type: "error",
-        requestId,
+        rid,
         timestamp: new Date().toISOString(),
         error: {
           code: "UNSUPPORTED_INPUT",
@@ -116,16 +116,16 @@ export class ClaudeProvider extends BaseProvider {
       prompt: request.input,
       options: this.options(request, abortController)
     });
-    this.queries.set(requestId, claude);
+    this.queries.set(rid, claude);
 
     try {
       for await (const message of claude) {
-        yield this.normalizeMessage(requestId, message);
+        yield this.normalizeMessage(rid, message);
       }
     } catch (error) {
       yield {
         type: "error",
-        requestId,
+        rid,
         timestamp: new Date().toISOString(),
         error: {
           code: abortController.signal.aborted ? "PROVIDER_CANCELLED" : "PROVIDER_ERROR",
@@ -134,13 +134,13 @@ export class ClaudeProvider extends BaseProvider {
         }
       };
     } finally {
-      this.queries.delete(requestId);
+      this.queries.delete(rid);
     }
   }
 
-  override async cancel(requestId: string): Promise<void> {
-    this.queries.get(requestId)?.close();
-    this.queries.delete(requestId);
+  override async cancel(rid: string): Promise<void> {
+    this.queries.get(rid)?.close();
+    this.queries.delete(rid);
   }
 
   private options(request: ProviderRequest, abortController: AbortController): Options {
@@ -149,17 +149,17 @@ export class ClaudeProvider extends BaseProvider {
       model: request.model,
       resume: request.session,
       abortController,
-      ...(request.nativeOptions?.claudeOptions as Record<string, unknown> | undefined)
+      ...(request.options?.claudeOptions as Record<string, unknown> | undefined)
     };
   }
 
-  private normalizeMessage(requestId: string, message: SDKMessage): StreamEvent {
+  private normalizeMessage(rid: string, message: SDKMessage): StreamEvent {
     const timestamp = new Date().toISOString();
 
     if (message.type === "assistant") {
       return {
         type: "message",
-        requestId,
+        rid,
         role: "assistant",
         delta: assistantText(message),
         raw: message,
@@ -171,12 +171,12 @@ export class ClaudeProvider extends BaseProvider {
       if (message.subtype === "success") {
         return {
           type: "done",
-          requestId,
+          rid,
           response: {
-            requestId,
+            rid,
             provider: this.id,
             session: message.session_id,
-            finalText: message.result,
+            output: message.result,
             usage: {
               durationMs: message.duration_ms,
               durationApiMs: message.duration_api_ms,
@@ -192,7 +192,7 @@ export class ClaudeProvider extends BaseProvider {
 
       return {
         type: "error",
-        requestId,
+        rid,
         error: {
           code: "PROVIDER_ERROR",
           message: message.errors.join("\n") || "Claude failed.",
@@ -207,7 +207,7 @@ export class ClaudeProvider extends BaseProvider {
     if (message.type === "system" && message.subtype === "init") {
       return {
         type: "message",
-        requestId,
+        rid,
         role: "system",
         content: `Claude session initialized with ${message.model}.`,
         raw: message,
@@ -218,7 +218,7 @@ export class ClaudeProvider extends BaseProvider {
     if (message.type === "auth_status") {
       return {
         type: "stderr",
-        requestId,
+        rid,
         data: message.error ?? message.output.join("\n"),
         raw: message,
         timestamp
@@ -228,7 +228,7 @@ export class ClaudeProvider extends BaseProvider {
     if (message.type === "tool_progress") {
       return {
         type: "tool_call",
-        requestId,
+        rid,
         toolCallId: message.tool_use_id,
         name: message.tool_name,
         status: "running",
@@ -239,7 +239,7 @@ export class ClaudeProvider extends BaseProvider {
 
     return {
       type: "stdout",
-      requestId,
+      rid,
       data: JSON.stringify(message),
       raw: message,
       timestamp

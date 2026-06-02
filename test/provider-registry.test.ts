@@ -32,8 +32,8 @@ class FakeProvider implements AgentProvider {
     };
   }
 
-  async invoke(_requestId: string, _request: ProviderRequest): Promise<ProviderResponse> {
-    return { requestId: "inv_1", provider: this.id };
+  async invoke(_rid: string, _request: ProviderRequest): Promise<ProviderResponse> {
+    return { rid: "inv_1", provider: this.id };
   }
 
   async *stream(): AsyncIterable<StreamEvent> {

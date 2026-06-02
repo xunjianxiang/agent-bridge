@@ -15,11 +15,11 @@ export const providerInputSchema = z.union([
 export const providerRequestSchema = z.object({
   provider: providerIdSchema,
   input: providerInputSchema,
-  cwd: z.string().optional(),
+  project: z.string().optional(),
   model: z.string().optional(),
   session: z.string().optional(),
-  nativeOptions: z.record(z.string(), z.unknown()).optional(),
+  options: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional()
-});
+}).strict();
 
 export type ProviderRequestDto = z.infer<typeof providerRequestSchema>;

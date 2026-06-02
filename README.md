@@ -6,12 +6,30 @@ It adapts provider SDKs and CLIs behind one HTTP/SSE surface. It does not manage
 
 ## Development
 
+### Prerequisites
+
+- Node.js 22 or newer.
+- At least one supported local agent installed and authenticated:
+  - Codex: `codex --version` and `codex login status` should pass.
+  - Claude: `claude --version` and `claude auth status` should pass.
+  - Gemini: credentials must be available to `@google/gemini-cli-core`.
+
+Copy `.env.example` to `.env` when you want to override the default host, port,
+provider detection cache, or browser CORS origins.
+
 ```bash
 npm install
 npm run start:dev
 ```
 
 Default server: `http://127.0.0.1:8787`
+
+Check the service before invoking an agent:
+
+```bash
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/providers
+```
 
 Browser CORS is disabled by default because this gateway can invoke local agents
 against local working directories. To allow browser clients, set explicit origins:
@@ -74,9 +92,28 @@ POST /invoke
 
 `requestId` identifies one bridge invocation. `session` is the value to persist if the caller wants resume behavior.
 
+Request fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `provider` | Yes | One of `codex`, `claude`, or `gemini`. |
+| `input` | Yes | A string, or an array of content parts. Arrays support `{ "type": "text", "text": "..." }` and `{ "type": "local_image", "path": "..." }`. Local image input is Codex-only. |
+| `cwd` | No | Working directory passed to the provider. Treat this as a local filesystem permission boundary for the agent. |
+| `model` | No | Provider model override. |
+| `session` | No | Native provider session id from a previous response. |
+| `metadata` | No | Caller metadata. The bridge accepts it but does not interpret it. |
+
 `nativeOptions` is an experimental provider-specific escape hatch. Prefer the
 stable top-level fields (`provider`, `cwd`, `input`, `model`, `session`) unless a
 provider adapter explicitly documents an option.
+
+Known `nativeOptions` keys:
+
+| Provider | Keys |
+| --- | --- |
+| Codex | `codexOptions`, `threadOptions`, `turnOptions` |
+| Claude | `claudeOptions` |
+| Gemini | `geminiAuthType`, `geminiApiKey`, `geminiBaseUrl`, `geminiCustomHeaders`, `geminiConfig` |
 
 ### Async Invoke and Cancel
 
@@ -159,8 +196,13 @@ npm run smoke
 npm run smoke -- -- --http-only
 ```
 
+The HTTP-only command intentionally has two `--` separators: the first forwards
+arguments through `npm`, and the second is passed to the smoke script.
+
 ## Provider Status
 
-- Codex: implemented for invoke, stream, cancel, local image input, and native session resume.
-- Gemini: implemented through `@google/gemini-cli-core` for string input, stream, cancel, and native session resume.
-- Claude: implemented through the Claude Agent SDK for string input, stream, cancel, and native session resume.
+| Provider | Text | Local image | Stream | Cancel | Native session | Detection/auth notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Codex | Yes | Yes | Yes | Abort signal | Yes | Requires the Codex SDK package plus a working `codex` CLI login. |
+| Claude | Yes | No | Yes | SDK interrupt | Yes | Requires the Claude Agent SDK package plus a working `claude` CLI login. |
+| Gemini | Yes | No | Yes | Abort signal | Yes | Uses `@google/gemini-cli-core`; auth defaults to Google login unless overridden by `AGENT_BRIDGE_GEMINI_AUTH_TYPE` or `nativeOptions`. |

@@ -1,6 +1,6 @@
-import { BadRequestException, Body, Controller, Post } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Post } from "@nestjs/common";
 import type { ProviderResponse } from "../core/types.js";
-import { InvokeService } from "./invoke.service.js";
+import { InvokeService, type InvokeRunSnapshot } from "./invoke.service.js";
 
 @Controller()
 export class InvokeController {
@@ -9,6 +9,16 @@ export class InvokeController {
   @Post("invoke")
   async invoke(@Body() body: unknown): Promise<ProviderResponse> {
     return await this.invokeService.invoke(body);
+  }
+
+  @Post("invoke/async")
+  start(@Body() body: unknown): InvokeRunSnapshot {
+    return this.invokeService.start(body);
+  }
+
+  @Get("invoke/:requestId")
+  async getRun(@Param("requestId") requestId: string): Promise<InvokeRunSnapshot> {
+    return await this.invokeService.getRun(requestId);
   }
 
   @Post("cancel")

@@ -98,4 +98,18 @@ describe("provider detection", () => {
     expect(info.status).toBe("missing");
     expect(info.authStatus).toBe("missing");
   });
+
+  it("marks Claude available when CLI and auth are configured", async () => {
+    const provider = new ClaudeProvider(
+      runner([
+        { exitCode: 0, stdout: "2.1.158 (Claude Code)", stderr: "" },
+        { exitCode: 0, stdout: '{"loggedIn":true}', stderr: "" }
+      ])
+    );
+
+    const info = await provider.detect();
+
+    expect(info.status).toBe("available");
+    expect(info.authStatus).toBe("configured");
+  });
 });

@@ -1,6 +1,11 @@
 export type ProviderId = "codex" | "claude" | "gemini";
 
-export type ProviderStatus = "available" | "missing" | "misconfigured" | "error";
+export type ProviderStatus =
+  | "available"
+  | "missing"
+  | "misconfigured"
+  | "not_implemented"
+  | "error";
 
 export interface BridgeError {
   code: string;

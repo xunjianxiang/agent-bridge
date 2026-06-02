@@ -1,4 +1,5 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
+import { query, type Options, type Query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { BaseProvider } from "./base-provider.js";
 import type {
   ProviderCapabilities,
@@ -9,11 +10,20 @@ import type {
 import { ProcessRunnerService } from "../process/process-runner.service.js";
 import { resolvePackageVersion } from "./package-version.js";
 
+export type ClaudeQuery = typeof query;
+export const CLAUDE_QUERY = Symbol("CLAUDE_QUERY");
+
 @Injectable()
 export class ClaudeProvider extends BaseProvider {
   readonly id = "claude" as const;
+  private readonly queries = new Map<string, Query>();
 
-  constructor(private readonly processRunner: ProcessRunnerService) {
+  constructor(
+    private readonly processRunner: ProcessRunnerService,
+    @Optional()
+    @Inject(CLAUDE_QUERY)
+    private readonly claudeQuery: ClaudeQuery = query
+  ) {
     super();
   }
 
@@ -79,17 +89,166 @@ export class ClaudeProvider extends BaseProvider {
 
   async *stream(
     requestId: string,
-    _request: ProviderRequest
+    request: ProviderRequest
   ): AsyncIterable<StreamEvent> {
-    yield {
-      type: "error",
-      requestId,
-      timestamp: new Date().toISOString(),
-      error: {
-        code: "NOT_IMPLEMENTED",
-        message: "Claude invocation is not implemented yet.",
-        provider: this.id
+    if (typeof request.input !== "string") {
+      yield {
+        type: "error",
+        requestId,
+        timestamp: new Date().toISOString(),
+        error: {
+          code: "UNSUPPORTED_INPUT",
+          message: "Claude Agent SDK adapter currently accepts string input only.",
+          provider: this.id
+        }
+      };
+      return;
+    }
+
+    const abortController = new AbortController();
+    if (request.signal) {
+      request.signal.addEventListener("abort", () => abortController.abort(), {
+        once: true
+      });
+    }
+
+    const claude = this.claudeQuery({
+      prompt: request.input,
+      options: this.options(request, abortController)
+    });
+    this.queries.set(requestId, claude);
+
+    try {
+      for await (const message of claude) {
+        yield this.normalizeMessage(requestId, message);
       }
+    } catch (error) {
+      yield {
+        type: "error",
+        requestId,
+        timestamp: new Date().toISOString(),
+        error: {
+          code: abortController.signal.aborted ? "PROVIDER_CANCELLED" : "PROVIDER_ERROR",
+          message: error instanceof Error ? error.message : String(error),
+          provider: this.id
+        }
+      };
+    } finally {
+      this.queries.delete(requestId);
+    }
+  }
+
+  override async cancel(requestId: string): Promise<void> {
+    this.queries.get(requestId)?.close();
+    this.queries.delete(requestId);
+  }
+
+  private options(request: ProviderRequest, abortController: AbortController): Options {
+    return {
+      cwd: request.cwd,
+      model: request.model,
+      resume: request.session,
+      abortController,
+      ...(request.nativeOptions?.claudeOptions as Record<string, unknown> | undefined)
     };
   }
+
+  private normalizeMessage(requestId: string, message: SDKMessage): StreamEvent {
+    const timestamp = new Date().toISOString();
+
+    if (message.type === "assistant") {
+      return {
+        type: "message",
+        requestId,
+        role: "assistant",
+        delta: assistantText(message),
+        raw: message,
+        timestamp
+      };
+    }
+
+    if (message.type === "result") {
+      if (message.subtype === "success") {
+        return {
+          type: "done",
+          requestId,
+          response: {
+            requestId,
+            provider: this.id,
+            session: message.session_id,
+            finalText: message.result,
+            usage: {
+              durationMs: message.duration_ms,
+              durationApiMs: message.duration_api_ms,
+              totalCostUsd: message.total_cost_usd,
+              usage: message.usage,
+              modelUsage: message.modelUsage
+            },
+            raw: message
+          },
+          timestamp
+        };
+      }
+
+      return {
+        type: "error",
+        requestId,
+        error: {
+          code: "PROVIDER_ERROR",
+          message: message.errors.join("\n") || "Claude failed.",
+          provider: this.id,
+          details: message
+        },
+        raw: message,
+        timestamp
+      };
+    }
+
+    if (message.type === "system" && message.subtype === "init") {
+      return {
+        type: "message",
+        requestId,
+        role: "system",
+        content: `Claude session initialized with ${message.model}.`,
+        raw: message,
+        timestamp
+      };
+    }
+
+    if (message.type === "auth_status") {
+      return {
+        type: "stderr",
+        requestId,
+        data: message.error ?? message.output.join("\n"),
+        raw: message,
+        timestamp
+      };
+    }
+
+    if (message.type === "tool_progress") {
+      return {
+        type: "tool_call",
+        requestId,
+        toolCallId: message.tool_use_id,
+        name: message.tool_name,
+        status: "running",
+        raw: message,
+        timestamp
+      };
+    }
+
+    return {
+      type: "stdout",
+      requestId,
+      data: JSON.stringify(message),
+      raw: message,
+      timestamp
+    };
+  }
+}
+
+function assistantText(message: Extract<SDKMessage, { type: "assistant" }>): string {
+  return message.message.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("");
 }

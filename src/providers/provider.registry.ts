@@ -7,6 +7,9 @@ import { GeminiProvider } from "./gemini.provider.js";
 @Injectable()
 export class ProviderRegistry {
   private readonly providers: Map<ProviderId, AgentProvider>;
+  private detectionCache?: ProviderInfo[];
+  private detectionCacheUpdatedAt = 0;
+  private detectionRefresh?: Promise<ProviderInfo[]>;
 
   constructor(
     codex: CodexProvider,
@@ -34,6 +37,44 @@ export class ProviderRegistry {
   }
 
   async detectAll(): Promise<ProviderInfo[]> {
-    return await Promise.all(this.all().map((provider) => provider.detect()));
+    if (!this.detectionCache) {
+      return await this.refreshDetection();
+    }
+
+    if (!this.isDetectionCacheExpired()) {
+      return this.detectionCache;
+    }
+
+    void this.refreshDetection();
+    return this.detectionCache;
   }
+
+  private async refreshDetection(): Promise<ProviderInfo[]> {
+    if (this.detectionRefresh) {
+      return await this.detectionRefresh;
+    }
+
+    this.detectionRefresh = Promise.all(
+      this.all().map((provider) => provider.detect())
+    ).then((providers) => {
+      this.detectionCache = providers;
+      this.detectionCacheUpdatedAt = Date.now();
+      return providers;
+    });
+
+    try {
+      return await this.detectionRefresh;
+    } finally {
+      this.detectionRefresh = undefined;
+    }
+  }
+
+  private isDetectionCacheExpired(): boolean {
+    return Date.now() - this.detectionCacheUpdatedAt >= providerDetectionTtlMs();
+  }
+}
+
+function providerDetectionTtlMs(): number {
+  const raw = Number(process.env.PROVIDER_DETECTION_TTL_MS ?? "30000");
+  return Number.isFinite(raw) && raw >= 0 ? raw : 30000;
 }

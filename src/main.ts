@@ -7,6 +7,7 @@ import {
   type NestFastifyApplication
 } from "@nestjs/platform-fastify";
 import { AppModule } from "./app.module.js";
+import { configureCors } from "./core/cors.js";
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -14,8 +15,8 @@ async function bootstrap(): Promise<void> {
     new FastifyAdapter({ logger: true })
   );
 
-  app.enableCors();
   const config = app.get(ConfigService);
+  configureCors(app, config);
   const host = config.get<string>("HOST", "127.0.0.1");
   const port = Number(config.get<string>("PORT", "8787"));
 

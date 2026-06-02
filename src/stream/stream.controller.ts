@@ -51,6 +51,12 @@ export class StreamController {
     reply.raw.on("close", onClose);
 
     try {
+      this.write(reply, {
+        type: "started",
+        requestId,
+        provider: provider.id,
+        timestamp: new Date().toISOString()
+      });
       for await (const event of provider.stream(requestId, request)) {
         this.write(reply, event);
       }

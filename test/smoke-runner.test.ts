@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { describe, expect, it } from "vitest";
 import {
   buildProviderSmokeSuites,
+  parseArgs,
   providerSkipReason,
   smokeProviderSuites
 } from "../scripts/smoke-test.js";
@@ -13,6 +14,12 @@ type SmokeCase = {
 };
 
 describe("smoke provider selection", () => {
+  it("parses smoke timeout options for clearer failure boundaries", () => {
+    const config = parseArgs(["--timeout-ms", "1500"]);
+
+    expect(config.timeoutMs).toBe(1500);
+  });
+
   it("keeps provider auth status in each suite", () => {
     const suites = buildProviderSmokeSuites(
       [{ id: "codex", status: "misconfigured", authStatus: "missing", nativeSession: true }],

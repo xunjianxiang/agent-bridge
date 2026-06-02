@@ -23,6 +23,7 @@ CORS_ORIGINS=http://localhost:3000 npm run start:dev
 ## API
 
 - `GET /health`
+- `GET /ready`
 - `GET /providers`
 - `POST /invoke`
 - `POST /invoke/async`
@@ -73,6 +74,10 @@ POST /invoke
 
 `requestId` identifies one bridge invocation. `session` is the value to persist if the caller wants resume behavior.
 
+`nativeOptions` is an experimental provider-specific escape hatch. Prefer the
+stable top-level fields (`provider`, `cwd`, `input`, `model`, `session`) unless a
+provider adapter explicitly documents an option.
+
 ### Async Invoke and Cancel
 
 `POST /invoke` waits for the provider to finish. Use `POST /invoke/async` when
@@ -110,6 +115,46 @@ POST /cancel
 {
   "requestId": "inv_..."
 }
+```
+
+### Stream
+
+`POST /stream` returns Server-Sent Events. The first event is always `started`
+so callers can capture the cancellable `requestId` before provider output begins:
+
+```text
+event: started
+data: {"type":"started","requestId":"inv_...","provider":"codex","timestamp":"..."}
+```
+
+Provider output then follows as `message`, `tool_call`, `tool_result`, `stdout`,
+`stderr`, `done`, or `error` events. The stream ends after `done` or `error`.
+
+### Errors
+
+HTTP errors use one envelope:
+
+```json
+{
+  "error": {
+    "code": "BAD_REQUEST",
+    "message": "Request validation failed.",
+    "retryable": false,
+    "details": {}
+  }
+}
+```
+
+Provider stream errors are sent as SSE `error` events with the same `error`
+object shape.
+
+### Smoke
+
+Run smoke checks after building:
+
+```bash
+npm run build
+npm run smoke -- --http-only --timeout-ms 10000
 ```
 
 ## Provider Status

@@ -12,6 +12,7 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = "8787";
 const DEFAULT_REPORT_PATH = "reports/smoke-report.json";
 const DEFAULT_HTML_REPORT_PATH = "reports/smoke-report.html";
+const DEFAULT_TIMEOUT_MS = 10000;
 
 export function providerIdsFrom(providers) {
   return providers.map((provider) => provider.id);
@@ -297,6 +298,7 @@ export function parseArgs(argv) {
     liveAgent: true,
     reportPath: DEFAULT_REPORT_PATH,
     htmlReportPath: DEFAULT_HTML_REPORT_PATH,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
     writeReport: true
   };
 
@@ -320,6 +322,11 @@ export function parseArgs(argv) {
     } else if (arg === "--html-report") {
       config.htmlReportPath = requireValue(argv, ++i, "--html-report");
       config.writeReport = true;
+    } else if (arg === "--timeout-ms") {
+      config.timeoutMs = Number(requireValue(argv, ++i, "--timeout-ms"));
+      if (!Number.isFinite(config.timeoutMs) || config.timeoutMs <= 0) {
+        throw new Error("--timeout-ms must be a positive number");
+      }
     } else if (arg === "--no-report") {
       config.writeReport = false;
     } else {
@@ -340,18 +347,18 @@ function requireValue(argv, index, flag) {
 
 async function main() {
   const config = parseArgs(process.argv.slice(2));
-  const server = await ensureServer(config.baseUrl);
+  const server = await ensureServer(config.baseUrl, config.timeoutMs);
   const startedAt = new Date().toISOString();
 
   try {
-    await checkHealth(config.baseUrl);
-    const providers = await checkProviders(config.baseUrl);
+    await checkHealth(config.baseUrl, config.timeoutMs);
+    const providers = await checkProviders(config.baseUrl, config.timeoutMs);
     checkEveryProviderDetected(providers);
     const suites = buildProviderSmokeSuites(providers, config);
     let results = [];
 
     if (config.liveAgent) {
-      results = await smokeProviderSuites(config.baseUrl, suites);
+      results = await smokeProviderSuites(config.baseUrl, suites, config.timeoutMs);
     }
 
     const report = createSmokeReport({
@@ -378,7 +385,7 @@ async function main() {
   }
 }
 
-async function ensureServer(baseUrl) {
+async function ensureServer(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
   if (await canReachHealth(baseUrl)) {
     logInfo(`Using running server at ${baseUrl}`);
     return { stop: async () => {} };
@@ -405,7 +412,7 @@ async function ensureServer(baseUrl) {
     stderr += chunk.toString("utf8");
   });
 
-  await waitForHealth(baseUrl, child, stderr);
+  await waitForHealth(baseUrl, child, stderr, timeoutMs);
 
   return {
     stop: async () => {
@@ -420,8 +427,8 @@ async function ensureServer(baseUrl) {
   };
 }
 
-async function waitForHealth(baseUrl, child, stderr) {
-  const deadline = Date.now() + 10_000;
+async function waitForHealth(baseUrl, child, stderr, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Server exited before health check passed. ${stderr}`.trim());
@@ -443,17 +450,17 @@ async function canReachHealth(baseUrl) {
   }
 }
 
-async function checkHealth(baseUrl) {
-  const body = await getJson(`${baseUrl}/health`, "health");
+async function checkHealth(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const body = await getJson(`${baseUrl}/health`, "health", timeoutMs);
   if (!body || typeof body !== "object") {
     throw new Error("Health response was not a JSON object");
   }
   logOk("GET /health");
 }
 
-async function checkProviders(baseUrl) {
+async function checkProviders(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
   logInfo("GET /providers");
-  const body = await getJson(`${baseUrl}/providers`, "providers");
+  const body = await getJson(`${baseUrl}/providers`, "providers", timeoutMs);
   const providers = Array.isArray(body) ? body : body.providers;
   if (!Array.isArray(providers)) {
     throw new Error("Providers response did not contain a provider list");
@@ -473,7 +480,7 @@ function checkEveryProviderDetected(providers) {
   }
 }
 
-export async function smokeProviderSuites(baseUrl, suites) {
+export async function smokeProviderSuites(baseUrl, suites, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const results = [];
 
   for (const suite of suites) {
@@ -502,7 +509,12 @@ export async function smokeProviderSuites(baseUrl, suites) {
       let response;
       try {
         request = buildCaseRequest(testCase, results, suite.provider);
-        response = await postInvoke(baseUrl, request, `${suite.provider} ${testCase.name}`);
+        response = await postInvoke(
+          baseUrl,
+          request,
+          `${suite.provider} ${testCase.name}`,
+          timeoutMs
+        );
         const assertion = validateCaseResponse(testCase, response);
         logOk(`${suite.provider} ${testCase.name}`);
         results.push({
@@ -573,12 +585,12 @@ function validateCaseResponse(testCase, response) {
   };
 }
 
-async function postInvoke(baseUrl, body, label) {
-  const response = await fetch(`${baseUrl}/invoke`, {
+async function postInvoke(baseUrl, body, label, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const response = await fetchWithTimeout(`${baseUrl}/invoke`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
-  });
+  }, timeoutMs);
   const payload = await response.json().catch(() => undefined);
   if (!response.ok) {
     throw new Error(`${label} failed with ${response.status}: ${JSON.stringify(payload)}`);
@@ -589,12 +601,27 @@ async function postInvoke(baseUrl, body, label) {
   return payload;
 }
 
-async function getJson(url, label) {
-  const response = await fetch(url);
+async function getJson(url, label, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const response = await fetchWithTimeout(url, undefined, timeoutMs);
   if (!response.ok) {
     throw new Error(`${label} failed with ${response.status}`);
   }
   return await response.json();
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`${url} timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function delay(ms) {

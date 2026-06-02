@@ -70,6 +70,12 @@ export interface ProviderResponse {
 
 export type StreamEvent =
   | {
+      type: "started";
+      requestId: string;
+      provider: ProviderId;
+      timestamp: string;
+    }
+  | {
       type: "stdout";
       requestId: string;
       data: string;

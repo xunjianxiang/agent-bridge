@@ -25,6 +25,8 @@ import type {
 import { ProcessRunnerService } from "../process/process-runner.service.js";
 import { resolvePackageVersion } from "./package-version.js";
 
+const GEMINI_DETECTION_TIMEOUT_MS = 3000;
+
 export const GEMINI_CORE_CONFIG_FACTORY = Symbol("GEMINI_CORE_CONFIG_FACTORY");
 export const GEMINI_CORE_SESSION_FACTORY = Symbol("GEMINI_CORE_SESSION_FACTORY");
 export const GEMINI_PROVIDER_DEPS = Symbol("GEMINI_PROVIDER_DEPS");
@@ -119,7 +121,11 @@ export class GeminiProvider extends BaseProvider {
           },
           "detect"
         );
-        await this.prepareConfig(config, {});
+        await withTimeout(
+          this.prepareConfig(config, {}),
+          GEMINI_DETECTION_TIMEOUT_MS,
+          `Gemini core initialization timed out after ${GEMINI_DETECTION_TIMEOUT_MS}ms`
+        );
         authStatus = "configured";
       } catch (error) {
         diagnostics.push(
@@ -148,6 +154,7 @@ export class GeminiProvider extends BaseProvider {
       yield {
         type: "error",
         rid,
+        provider: this.id,
         timestamp: new Date().toISOString(),
         error: {
           code: "UNSUPPORTED_INPUT",
@@ -160,6 +167,7 @@ export class GeminiProvider extends BaseProvider {
 
     let sessionId = request.session;
     let session: GeminiCoreSessionLike | undefined;
+    let output = "";
 
     try {
       const config = this.createConfig(request, rid);
@@ -178,18 +186,63 @@ export class GeminiProvider extends BaseProvider {
           content: [{ type: "text", text: request.input }]
         }
       })) {
-        const normalized = this.normalizeAgentEvent(rid, event, sessionId);
+        const timestamp = event.timestamp || new Date().toISOString();
         if (event.type === "initialize") {
           sessionId = event.sessionId;
         }
-        for (const item of normalized) {
-          yield item;
+        if (event.type === "message" && event.role === "agent") {
+          output += contentText(event.content);
+        }
+
+        yield {
+          type: "event",
+          rid,
+          provider: this.id,
+          event,
+          timestamp
+        };
+
+        if (event.type === "agent_end") {
+          yield {
+            type: "done",
+            rid,
+            provider: this.id,
+            response: {
+              rid,
+              provider: this.id,
+              session: sessionId,
+              output,
+              usage: event.data,
+              raw: event
+            },
+            event,
+            timestamp: new Date().toISOString()
+          };
+          return;
+        }
+
+        if (event.type === "error") {
+          yield {
+            type: "error",
+            rid,
+            provider: this.id,
+            error: {
+              code: event.status,
+              message: event.message,
+              provider: this.id,
+              details: event
+            },
+            event,
+            timestamp: new Date().toISOString()
+          };
+          return;
         }
       }
     } catch (error) {
       yield {
         type: "error",
         rid,
+        provider: this.id,
         timestamp: new Date().toISOString(),
         error: {
           code: "PROVIDER_ERROR",
@@ -305,165 +358,49 @@ export class GeminiProvider extends BaseProvider {
     return null;
   }
 
-  private normalizeAgentEvent(
-    rid: string,
-    event: AgentEvent,
-    sessionId: string | undefined
-  ): StreamEvent[] {
-    const timestamp = event.timestamp || new Date().toISOString();
-
-    switch (event.type) {
-      case "initialize":
-        return [
-          {
-            type: "message",
-            rid,
-            role: "system",
-            content: `Gemini core session initialized${
-              event.agentId ? ` with ${event.agentId}` : ""
-            }.`,
-            timestamp,
-            raw: event
-          }
-        ];
-      case "session_update":
-        return [
-          {
-            type: "message",
-            rid,
-            role: "system",
-            content: event.model
-              ? `Gemini model set to ${event.model}.`
-              : "Gemini session updated.",
-            timestamp,
-            raw: event
-          }
-        ];
-      case "message":
-        return [
-          {
-            type: "message",
-            rid,
-            role: mapAgentRole(event.role),
-            delta: contentText(event.content),
-            timestamp,
-            raw: event
-          }
-        ];
-      case "tool_request":
-        return [
-          {
-            type: "tool_call",
-            rid,
-            toolCallId: event.requestId,
-            name: event.name,
-            args: event.args,
-            status: "started",
-            timestamp,
-            raw: event
-          }
-        ];
-      case "tool_update":
-        return [
-          {
-            type: "tool_call",
-            rid,
-            toolCallId: event.requestId,
-            name: event.display?.name ?? "tool",
-            status: "running",
-            timestamp,
-            raw: event
-          }
-        ];
-      case "tool_response":
-        return [
-          {
-            type: "tool_result",
-            rid,
-            toolCallId: event.requestId,
-            status: event.isError ? "error" : "success",
-            output: event.data ?? contentText(event.content ?? []),
-            timestamp,
-            raw: event
-          }
-        ];
-      case "usage":
-        return [
-          {
-            type: "stdout",
-            rid,
-            data: JSON.stringify(event),
-            timestamp,
-            raw: event
-          }
-        ];
-      case "agent_end":
-        return [
-          {
-            type: "done",
-            rid,
-            response: {
-              rid,
-              provider: this.id,
-              session: sessionId,
-              usage: event.data,
-              raw: event
-            },
-            timestamp
-          }
-        ];
-      case "error":
-        return [
-          {
-            type: "error",
-            rid,
-            error: {
-              code: event.status,
-              message: event.message,
-              provider: this.id,
-              details: event
-            },
-            timestamp,
-            raw: event
-          }
-        ];
-      case "agent_start":
-      case "elicitation_request":
-      case "elicitation_response":
-      case "custom":
-        return [
-          {
-            type: "stdout",
-            rid,
-            data: JSON.stringify(event),
-            timestamp,
-            raw: event
-          }
-        ];
-    }
-  }
 }
 
 function defaultConfigFactory(
   request: ProviderRequest,
   rid: string
 ): GeminiCoreConfigLike {
+  const params = createGeminiConfigParameters(request, rid);
+
+  return new Config(params);
+}
+
+export function createGeminiConfigParameters(
+  request: ProviderRequest,
+  rid: string
+): ConfigParameters {
   const cwd = request.cwd ?? process.cwd();
+  const requestedConfig =
+    (request.options?.geminiConfig as Partial<ConfigParameters> | undefined) ??
+    {};
+  const {
+    sessionId: _ignoredSessionId,
+    cwd: _ignoredCwd,
+    targetDir: _ignoredTargetDir,
+    includeDirectories: _ignoredIncludeDirectories,
+    ...configOverrides
+  } = requestedConfig;
   const params: ConfigParameters = {
-    sessionId: request.session ?? createSessionId(),
     clientName: "agent-bridge",
-    targetDir: cwd,
-    cwd,
     debugMode: false,
     model: request.model ?? DEFAULT_GEMINI_FLASH_MODEL,
     interactive: false,
+    approvalMode: "yolo" as ConfigParameters["approvalMode"],
     noBrowser: true,
     trustedFolder: true,
+    disableYoloMode: false,
     checkpointing: true,
     skillsSupport: true,
     mcpEnabled: true,
     extensionsEnabled: true,
-    ...(request.options?.geminiConfig as Partial<ConfigParameters> | undefined)
+    ...configOverrides,
+    sessionId: request.session ?? createSessionId(),
+    targetDir: cwd,
+    cwd
   };
 
   if (rid === "detect") {
@@ -474,7 +411,7 @@ function defaultConfigFactory(
     params.extensionsEnabled = false;
   }
 
-  return new Config(params);
+  return params;
 }
 
 function defaultSessionFactory(deps: {
@@ -505,18 +442,28 @@ function contentText(
     .join("");
 }
 
-function mapAgentRole(role: "user" | "agent" | "developer"): "assistant" | "user" | "system" {
-  if (role === "agent") {
-    return "assistant";
-  }
-  if (role === "developer") {
-    return "system";
-  }
-  return "user";
-}
-
 function debugGeminiResume(message: string): void {
   if (process.env.AGENT_BRIDGE_DEBUG_GEMINI_RESUME === "1") {
     console.error(`[gemini resume] ${message}`);
+  }
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }

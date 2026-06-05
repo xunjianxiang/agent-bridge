@@ -20,14 +20,10 @@ export abstract class BaseProvider implements AgentProvider {
     rid: string,
     request: ProviderRequest
   ): Promise<ProviderResponse> {
-    let output = "";
     let response: ProviderResponse | undefined;
     let lastError: BridgeError | undefined;
 
     for await (const event of this.stream(rid, request)) {
-      if (event.type === "message" && event.role === "assistant") {
-        output += event.delta ?? event.content ?? "";
-      }
       if (event.type === "done") {
         response = event.response;
         break;
@@ -46,13 +42,12 @@ export abstract class BaseProvider implements AgentProvider {
         ? {
             ...response,
             session: response.session ?? request.session,
-            output: response.output ?? output
+            output: response.output
           }
         : {
         rid,
         provider: this.id,
-        session: request.session,
-        output
+        session: request.session
       }
     );
   }

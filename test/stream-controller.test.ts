@@ -11,6 +11,7 @@ describe("StreamController", () => {
         yield {
           type: "done",
           rid,
+          provider: "codex",
           response: { rid, provider: "codex" },
           timestamp: "2026-06-02T00:00:00.000Z"
         };

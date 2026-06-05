@@ -68,71 +68,32 @@ export interface ProviderResponse {
   raw?: unknown;
 }
 
-export type StreamEvent =
+export type StreamEvent = ProviderStreamEvent;
+
+export type ProviderStreamEvent =
   | {
-      type: "started";
+      type: "event";
       rid: string;
       provider: ProviderId;
-      timestamp: string;
-    }
-  | {
-      type: "stdout";
-      rid: string;
-      data: string;
-      timestamp: string;
-      raw?: unknown;
-    }
-  | {
-      type: "stderr";
-      rid: string;
-      data: string;
-      timestamp: string;
-      raw?: unknown;
-    }
-  | {
-      type: "message";
-      rid: string;
-      role: "assistant" | "user" | "system";
-      delta?: string;
-      content?: string;
-      raw?: unknown;
-      timestamp: string;
-    }
-  | ToolCallEvent
-  | {
-      type: "tool_result";
-      rid: string;
-      toolCallId: string;
-      status: "success" | "error" | "cancelled";
-      output?: unknown;
-      error?: BridgeError;
-      raw?: unknown;
+      event: unknown;
       timestamp: string;
     }
   | {
       type: "done";
       rid: string;
+      provider: ProviderId;
       response: ProviderResponse;
+      event?: unknown;
       timestamp: string;
     }
   | {
       type: "error";
       rid: string;
+      provider: ProviderId;
       error: BridgeError;
-      raw?: unknown;
+      event?: unknown;
       timestamp: string;
     };
-
-export interface ToolCallEvent {
-  type: "tool_call";
-  rid: string;
-  toolCallId: string;
-  name: string;
-  args?: Record<string, unknown>;
-  status?: "started" | "running" | "awaiting_approval" | "completed" | "failed";
-  raw?: unknown;
-  timestamp: string;
-}
 
 export interface AgentProvider {
   readonly id: ProviderId;

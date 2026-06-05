@@ -65,6 +65,7 @@ export class StreamController {
       this.write(reply, {
         type: "error",
         rid,
+        provider: provider.id,
         timestamp: new Date().toISOString(),
         error: {
           code: "STREAM_FAILED",
@@ -80,7 +81,7 @@ export class StreamController {
     }
   }
 
-  private write(reply: FastifyReply, event: StreamEvent): void {
+  private write(reply: FastifyReply, event: StreamEvent | { type: "started"; rid: string; provider: ProviderRequest["provider"]; timestamp: string }): void {
     reply.raw.write(formatSseEvent(event));
   }
 }

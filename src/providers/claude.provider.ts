@@ -95,6 +95,7 @@ export class ClaudeProvider extends BaseProvider {
       yield {
         type: "error",
         rid,
+        provider: this.id,
         timestamp: new Date().toISOString(),
         error: {
           code: "UNSUPPORTED_INPUT",
@@ -120,12 +121,62 @@ export class ClaudeProvider extends BaseProvider {
 
     try {
       for await (const message of claude) {
-        yield this.normalizeMessage(rid, message);
+        const timestamp = new Date().toISOString();
+        yield {
+          type: "event",
+          rid,
+          provider: this.id,
+          event: message,
+          timestamp
+        };
+
+        if (message.type === "result") {
+          if (message.subtype === "success") {
+            yield {
+              type: "done",
+              rid,
+              provider: this.id,
+              response: {
+                rid,
+                provider: this.id,
+                session: message.session_id,
+                output: message.result,
+                usage: {
+                  durationMs: message.duration_ms,
+                  durationApiMs: message.duration_api_ms,
+                  totalCostUsd: message.total_cost_usd,
+                  usage: message.usage,
+                  modelUsage: message.modelUsage
+                },
+                raw: message
+              },
+              event: message,
+              timestamp: new Date().toISOString()
+            };
+            return;
+          }
+
+          yield {
+            type: "error",
+            rid,
+            provider: this.id,
+            error: {
+              code: "PROVIDER_ERROR",
+              message: message.errors.join("\n") || "Claude failed.",
+              provider: this.id,
+              details: message
+            },
+            event: message,
+            timestamp: new Date().toISOString()
+          };
+          return;
+        }
       }
     } catch (error) {
       yield {
         type: "error",
         rid,
+        provider: this.id,
         timestamp: new Date().toISOString(),
         error: {
           code: abortController.signal.aborted ? "PROVIDER_CANCELLED" : "PROVIDER_ERROR",
@@ -144,111 +195,17 @@ export class ClaudeProvider extends BaseProvider {
   }
 
   private options(request: ProviderRequest, abortController: AbortController): Options {
+    const claudeOptionOverrides =
+      (request.options?.claudeOptions as Partial<Options> | undefined) ?? {};
     return {
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      ...claudeOptionOverrides,
       cwd: request.cwd,
-      model: request.model,
+      model: request.model ?? claudeOptionOverrides.model,
       resume: request.session,
-      abortController,
-      ...(request.options?.claudeOptions as Record<string, unknown> | undefined)
+      abortController
     };
   }
 
-  private normalizeMessage(rid: string, message: SDKMessage): StreamEvent {
-    const timestamp = new Date().toISOString();
-
-    if (message.type === "assistant") {
-      return {
-        type: "message",
-        rid,
-        role: "assistant",
-        delta: assistantText(message),
-        raw: message,
-        timestamp
-      };
-    }
-
-    if (message.type === "result") {
-      if (message.subtype === "success") {
-        return {
-          type: "done",
-          rid,
-          response: {
-            rid,
-            provider: this.id,
-            session: message.session_id,
-            output: message.result,
-            usage: {
-              durationMs: message.duration_ms,
-              durationApiMs: message.duration_api_ms,
-              totalCostUsd: message.total_cost_usd,
-              usage: message.usage,
-              modelUsage: message.modelUsage
-            },
-            raw: message
-          },
-          timestamp
-        };
-      }
-
-      return {
-        type: "error",
-        rid,
-        error: {
-          code: "PROVIDER_ERROR",
-          message: message.errors.join("\n") || "Claude failed.",
-          provider: this.id,
-          details: message
-        },
-        raw: message,
-        timestamp
-      };
-    }
-
-    if (message.type === "system" && message.subtype === "init") {
-      return {
-        type: "message",
-        rid,
-        role: "system",
-        content: `Claude session initialized with ${message.model}.`,
-        raw: message,
-        timestamp
-      };
-    }
-
-    if (message.type === "auth_status") {
-      return {
-        type: "stderr",
-        rid,
-        data: message.error ?? message.output.join("\n"),
-        raw: message,
-        timestamp
-      };
-    }
-
-    if (message.type === "tool_progress") {
-      return {
-        type: "tool_call",
-        rid,
-        toolCallId: message.tool_use_id,
-        name: message.tool_name,
-        status: "running",
-        raw: message,
-        timestamp
-      };
-    }
-
-    return {
-      type: "stdout",
-      rid,
-      data: JSON.stringify(message),
-      raw: message,
-      timestamp
-    };
-  }
-}
-
-function assistantText(message: Extract<SDKMessage, { type: "assistant" }>): string {
-  return message.message.content
-    .map((block) => (block.type === "text" ? block.text : ""))
-    .join("");
 }

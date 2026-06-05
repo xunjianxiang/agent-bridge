@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import {
   GEMINI_CORE_CONFIG_FACTORY,
   GEMINI_CORE_SESSION_FACTORY,
   GeminiProvider,
+  createGeminiConfigParameters,
   type GeminiCoreConfigLike,
   type GeminiCoreSessionLike
 } from "../src/providers/gemini.provider.js";
@@ -46,6 +47,70 @@ function createSession(events: AgentEvent[]): GeminiCoreSessionLike {
 }
 
 describe("GeminiProvider core adapter", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("uses Gemini yolo approval mode by default", () => {
+    const params = createGeminiConfigParameters(
+      {
+        provider: "gemini",
+        input: "Run without prompts",
+        cwd: "C:/repo"
+      },
+      "inv_1"
+    );
+
+    expect(params.approvalMode).toBe("yolo");
+    expect(params.disableYoloMode).toBe(false);
+    expect(params.trustedFolder).toBe(true);
+    expect(params.interactive).toBe(false);
+  });
+
+  it("allows Gemini config overrides to replace the default yolo mode", () => {
+    const params = createGeminiConfigParameters(
+      {
+        provider: "gemini",
+        input: "Run with custom config",
+        options: {
+          geminiConfig: {
+            approvalMode: "default",
+            disableYoloMode: true
+          }
+        }
+      },
+      "inv_1"
+    );
+
+    expect(params.approvalMode).toBe("default");
+    expect(params.disableYoloMode).toBe(true);
+  });
+
+  it("does not let Gemini config override the bridge project directory", () => {
+    const params = createGeminiConfigParameters(
+      {
+        provider: "gemini",
+        input: "Run in project",
+        cwd: "C:/repo/projects/app",
+        session: "session_bridge",
+        options: {
+          geminiConfig: {
+            cwd: "C:/outside",
+            targetDir: "C:/outside",
+            sessionId: "session_outside",
+            includeDirectories: ["C:/outside"]
+          }
+        }
+      },
+      "inv_1"
+    );
+
+    expect(params.cwd).toBe("C:/repo/projects/app");
+    expect(params.targetDir).toBe("C:/repo/projects/app");
+    expect(params.sessionId).toBe("session_bridge");
+    expect(params.includeDirectories).toBeUndefined();
+  });
+
   it("returns the Gemini core session id from the initialize event", async () => {
     const config = createConfig();
     const session = createSession([
@@ -194,6 +259,27 @@ describe("GeminiProvider core adapter", () => {
     expect(info.executable).toBeUndefined();
     expect(processRunner.run).not.toHaveBeenCalled();
     expect(processRunner.spawn).not.toHaveBeenCalled();
+  });
+
+  it("returns misconfigured when Gemini core detection does not finish before its deadline", async () => {
+    vi.useFakeTimers();
+    const provider = new GeminiProvider({} as ProcessRunnerService, {
+      [GEMINI_CORE_CONFIG_FACTORY]: () =>
+        createConfig({
+          initialize: () => new Promise(() => undefined)
+        })
+    });
+
+    const detection = provider.detect();
+    await vi.advanceTimersByTimeAsync(3001);
+
+    await expect(detection).resolves.toMatchObject({
+      status: "misconfigured",
+      authStatus: "missing",
+      diagnostics: [
+        "Gemini core initialization failed: Gemini core initialization timed out after 3000ms"
+      ]
+    });
   });
 
   it("uses local OAuth auth by default even when API key environment variables exist", async () => {

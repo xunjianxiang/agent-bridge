@@ -1,8 +1,9 @@
 # AgentBridge
 
-AgentBridge is a lightweight API gateway for local AI coding agents.
+AgentBridge is a lightweight provider proxy for local AI coding agents.
 
-It adapts provider SDKs and CLIs behind one HTTP/SSE surface. It does not manage workflows or multi-agent orchestration.
+It exposes local provider SDKs and CLIs over HTTP/SSE while preserving provider
+behavior. It does not manage workflows or multi-agent orchestration.
 
 ## Development
 
@@ -25,12 +26,19 @@ npm run start:dev
 
 Default server: `http://127.0.0.1:8787`
 
-`WORKSPACE` is optional and defaults to `~/.agent-bridge` when unset. It defines
-the only directory tree callers can target. Requests select a relative
-`project`, and the bridge runs the agent in `${WORKSPACE}/projects/${project}`.
+`WORKSPACE` is optional and defaults to `~/.agent-bridge` when unset. Requests
+select a relative `project`, and the bridge starts the agent in
+`${WORKSPACE}/projects/${project}`.
 Set `WORKSPACE` only if you want a different base directory. If
 `WORKSPACE=C:\Users\xman\.agent-bridge`, use `"project": "agent-bridge"` to run
 an agent in `C:\Users\xman\.agent-bridge\projects\agent-bridge`.
+
+`project` is enforced for the provider working directory. Absolute paths and
+`..` escapes are rejected, and provider options cannot override the bridge-owned
+working directory fields. Because AgentBridge defaults providers to
+auto-approval/yolo mode, `project` is not a hard operating-system sandbox: a
+provider that can execute shell commands may still touch absolute paths outside
+the project unless the provider's own sandboxing is configured to prevent it.
 
 Check the service before invoking an agent:
 
@@ -51,7 +59,15 @@ CORS_ORIGINS=http://localhost:3000 npm run start:dev
 - `GET /health`
 - `GET /ready`
 - `GET /providers`
+- `GET /providers/:provider`
 - `POST /invoke`
+- `POST /runs`
+- `GET /runs/:id`
+- `GET /runs/:id/events`
+- `DELETE /runs/:id`
+
+Legacy compatibility endpoints:
+
 - `POST /invoke/async`
 - `GET /invoke/:rid`
 - `POST /cancel`
@@ -125,10 +141,86 @@ Known `options` keys:
 | Claude | `claudeOptions` |
 | Gemini | `geminiAuthType`, `geminiApiKey`, `geminiBaseUrl`, `geminiCustomHeaders`, `geminiConfig` |
 
-### Async Invoke and Cancel
+AgentBridge defaults provider calls to non-interactive auto-approval mode so
+remote API calls do not block on local approval prompts:
+
+| Provider | Default mapping |
+| --- | --- |
+| Codex | `threadOptions.approvalPolicy = "never"` and `threadOptions.sandboxMode = "danger-full-access"` |
+| Claude | `claudeOptions.permissionMode = "bypassPermissions"` and `claudeOptions.allowDangerouslySkipPermissions = true` |
+| Gemini | `geminiConfig.approvalMode = "yolo"`, `disableYoloMode = false`, `trustedFolder = true`, and `interactive = false` |
+
+Provider-specific options are applied after these defaults, so callers can still
+override the mode for a specific request.
+
+### Runs
+
+Use runs for asynchronous provider execution. A run continues after the HTTP
+request that created it returns. Subscribe to its events separately with SSE.
+This avoids restarting a provider when an SSE client reconnects.
+
+Create a run:
+
+```json
+POST /runs
+{
+  "provider": "codex",
+  "project": "agent-bridge",
+  "input": "Start a long task"
+}
+```
+
+Response:
+
+```json
+{
+  "id": "018bcfe5-6800-7a3f-9c2d-4b6f9a1e2c30",
+  "provider": "codex",
+  "status": "running",
+  "createdAt": "...",
+  "updatedAt": "...",
+  "eventsUrl": "/runs/018bcfe5-6800-7a3f-9c2d-4b6f9a1e2c30/events"
+}
+```
+
+Check status:
+
+```text
+GET /runs/018bcfe5-6800-7a3f-9c2d-4b6f9a1e2c30
+```
+
+Subscribe to events:
+
+```text
+GET /runs/018bcfe5-6800-7a3f-9c2d-4b6f9a1e2c30/events
+Accept: text/event-stream
+```
+
+Run event streams replay AgentBridge's buffered provider events. Each event has
+a monotonic SSE id. Reconnect with `Last-Event-ID` to resume from the next
+buffered event without starting the provider again:
+
+```text
+Last-Event-ID: 12
+```
+
+Provider output is sent as `event` events with the provider event object in
+`data`. Completion and errors are sent as `done` or `error`.
+
+Cancel a run:
+
+```text
+DELETE /runs/018bcfe5-6800-7a3f-9c2d-4b6f9a1e2c30
+```
+
+Run statuses are `running`, `cancelling`, `completed`, `failed`, or
+`cancelled`.
+
+### Legacy Async Invoke and Cancel
 
 `POST /invoke` waits for the provider to finish. Use `POST /invoke/async` when
-the caller needs a cancellable request id before completion:
+the caller needs a cancellable request id before completion. New callers should
+prefer `POST /runs`.
 
 ```json
 POST /invoke/async
@@ -164,7 +256,7 @@ POST /cancel
 }
 ```
 
-### Stream
+### Legacy Stream
 
 `POST /stream` returns Server-Sent Events. The first event is always `started`
 so callers can capture the cancellable `rid` before provider output begins:
@@ -174,8 +266,23 @@ event: started
 data: {"type":"started","rid":"018bcfe5-6800-7a3f-9c2d-4b6f9a1e2c30","provider":"codex","timestamp":"..."}
 ```
 
-Provider output then follows as `message`, `tool_call`, `tool_result`, `stdout`,
-`stderr`, `done`, or `error` events. The stream ends after `done` or `error`.
+Provider output then follows as `event` events containing provider-native
+payloads, followed by `done` or `error`. The stream ends after `done` or
+`error`.
+New callers that need reconnectable streams should create a run and subscribe to
+`GET /runs/:id/events`.
+
+### Session Safety
+
+Provider sessions are native and non-transactional. `session` in a request means
+"resume this native provider session"; `session` in a response is the session id
+callers should use next.
+
+Cancellation is best-effort. If a realtime call such as `POST /invoke` or legacy
+`POST /stream` is interrupted after a native session has been supplied, the
+provider session may contain partial state. Runs reduce disconnect-related
+session pollution because execution is not tied to the SSE subscription, but
+they cannot roll back provider-side failures or partial writes.
 
 ### Errors
 

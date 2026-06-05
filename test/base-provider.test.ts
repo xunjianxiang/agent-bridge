@@ -28,26 +28,28 @@ class FakeProvider extends BaseProvider {
 
   async *stream(): AsyncIterable<StreamEvent> {
     yield {
-      type: "message",
+      type: "event",
       rid: "inv_1",
-      role: "system",
-      content: "initialized",
+      provider: this.id,
+      event: { type: "system", content: "initialized" },
       timestamp: new Date().toISOString()
     };
     yield {
-      type: "message",
+      type: "event",
       rid: "inv_1",
-      role: "assistant",
-      delta: "pong",
+      provider: this.id,
+      event: { type: "assistant", delta: "pong" },
       timestamp: new Date().toISOString()
     };
     yield {
       type: "done",
       rid: "inv_1",
+      provider: this.id,
       timestamp: new Date().toISOString(),
       response: {
         rid: "inv_1",
-        provider: "gemini"
+        provider: "gemini",
+        output: "pong"
       }
     };
   }
@@ -58,6 +60,7 @@ class RecoveringProvider extends FakeProvider {
     yield {
       type: "error",
       rid: "inv_1",
+      provider: this.id,
       timestamp: new Date().toISOString(),
       error: {
         code: "TRANSIENT",
@@ -66,19 +69,21 @@ class RecoveringProvider extends FakeProvider {
       }
     };
     yield {
-      type: "message",
+      type: "event",
       rid: "inv_1",
-      role: "assistant",
-      delta: "pong",
+      provider: this.id,
+      event: { type: "assistant", delta: "pong" },
       timestamp: new Date().toISOString()
     };
     yield {
       type: "done",
       rid: "inv_1",
+      provider: this.id,
       timestamp: new Date().toISOString(),
       response: {
         rid: "inv_1",
-        provider: "gemini"
+        provider: "gemini",
+        output: "pong"
       }
     };
   }
@@ -87,19 +92,21 @@ class RecoveringProvider extends FakeProvider {
 class HangingAfterDoneProvider extends FakeProvider {
   override async *stream(): AsyncIterable<StreamEvent> {
     yield {
-      type: "message",
+      type: "event",
       rid: "inv_1",
-      role: "assistant",
-      delta: "pong",
+      provider: this.id,
+      event: { type: "assistant", delta: "pong" },
       timestamp: new Date().toISOString()
     };
     yield {
       type: "done",
       rid: "inv_1",
+      provider: this.id,
       timestamp: new Date().toISOString(),
       response: {
         rid: "inv_1",
-        provider: "gemini"
+        provider: "gemini",
+        output: "pong"
       }
     };
     await new Promise(() => undefined);
@@ -107,7 +114,7 @@ class HangingAfterDoneProvider extends FakeProvider {
 }
 
 describe("BaseProvider", () => {
-  it("returns assistant text as output when done response does not include it", async () => {
+  it("returns provider output from the done response", async () => {
     const provider = new FakeProvider();
     const request: ProviderRequest = {
       provider: "gemini",

@@ -1,5 +1,3 @@
-import type { StreamEvent } from "../core/types.js";
-
-export function formatSseEvent(event: StreamEvent): string {
+export function formatSseEvent(event: { type: string }): string {
   return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }

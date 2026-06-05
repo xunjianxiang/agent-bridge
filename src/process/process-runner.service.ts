@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 
@@ -88,10 +88,10 @@ export class ProcessRunnerService {
 
 function terminateProcessTree(child: ChildProcessWithoutNullStreams): void {
   if (process.platform === "win32" && child.pid) {
-    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true
-    });
+    }).unref();
     return;
   }
 

@@ -78,7 +78,9 @@ describe("ClaudeProvider", () => {
       prompt: "Reply with exactly: pong",
       options: expect.objectContaining({
         cwd: "C:\\repo",
-        model: "claude-test"
+        model: "claude-test",
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true
       })
     });
     expect(response).toMatchObject({
@@ -109,7 +111,70 @@ describe("ClaudeProvider", () => {
     expect(query).toHaveBeenCalledWith({
       prompt: "Continue",
       options: expect.objectContaining({
-        resume: "session_existing"
+        resume: "session_existing",
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true
+      })
+    });
+  });
+
+  it("lets request claudeOptions override default bypass permission settings", async () => {
+    const query = vi.fn(() =>
+      asQuery({
+      [Symbol.asyncIterator]: async function* () {
+        yield claudeResult("safe");
+      },
+      close: vi.fn()
+      })
+    );
+    const provider = createProvider(query);
+
+    await provider.invoke("inv_1", {
+      provider: "claude",
+      input: "Run with prompts",
+      options: {
+        claudeOptions: {
+          permissionMode: "default",
+          allowDangerouslySkipPermissions: false
+        }
+      }
+    });
+
+    expect(query).toHaveBeenCalledWith({
+      prompt: "Run with prompts",
+      options: expect.objectContaining({
+        permissionMode: "default",
+        allowDangerouslySkipPermissions: false
+      })
+    });
+  });
+
+  it("does not let claudeOptions override the bridge project directory", async () => {
+    const query = vi.fn(() =>
+      asQuery({
+      [Symbol.asyncIterator]: async function* () {
+        yield claudeResult("safe");
+      },
+      close: vi.fn()
+      })
+    );
+    const provider = createProvider(query);
+
+    await provider.invoke("inv_1", {
+      provider: "claude",
+      input: "Run in project",
+      cwd: "C:\\repo\\projects\\app",
+      options: {
+        claudeOptions: {
+          cwd: "C:\\outside"
+        }
+      }
+    });
+
+    expect(query).toHaveBeenCalledWith({
+      prompt: "Run in project",
+      options: expect.objectContaining({
+        cwd: "C:\\repo\\projects\\app"
       })
     });
   });
